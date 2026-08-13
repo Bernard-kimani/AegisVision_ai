@@ -60,6 +60,7 @@ input int               MA_Period = 20;               // MA period (1-minute cha
 input ENUM_APPLIED_PRICE MA_AppliedPrice = PRICE_CLOSE; // Price series the MA is calculated from
 input int       SlopeLookbackBars = 15;            // Bars back used to measure the MA slope
 input double    MinSlopePoints = 30.0;             // Minimum |slope| (in raw broker points/bar, from the window's swing high/low to now) to call the MA "sharply angled" - tune on demo
+input bool      DebugPrintSlope = false;           // Print the swing window's extreme bar/value and resulting slope every time the slope gate runs (verbose - for diagnosing slope discrepancies)
 
 input group "=== Strategy Trigger: Touch & Confirmation ==="
 input int       MaxConfirmationBars = 2;           // Touch candle itself, or up to this many bars after, may confirm
@@ -185,6 +186,7 @@ double GetSlopeToNow(string direction)
 {
     int count = SlopeLookbackBars + 1;
     double maBuf[];
+    ArraySetAsSeries(maBuf, true);
     if(CopyBuffer(maHandle, 0, 1, count, maBuf) <= 0) return 0.0;
     // maBuf[0] = latest closed bar (shift 1); maBuf[i] = i bars before that.
 
@@ -200,8 +202,22 @@ double GetSlopeToNow(string direction)
             if(maBuf[i] > maBuf[extremeIdx]) extremeIdx = i; // peak
         }
     }
-    if(extremeIdx == 0) return 0.0; // "now" IS the extreme - no leg to measure
-    return (maBuf[0] - maBuf[extremeIdx]) / extremeIdx / _Point;
+
+    // "now" IS the extreme - no leg to measure yet
+    double slope = (extremeIdx > 0) ? (maBuf[0] - maBuf[extremeIdx]) / extremeIdx / _Point : 0.0;
+
+    if(DebugPrintSlope)
+    {
+        string dump = "";
+        int copied = ArraySize(maBuf);
+        for(int i = 0; i < copied; i++)
+            dump += StringFormat("  [%d bars back] %s%s\n", i, DoubleToString(maBuf[i], _Digits), (i == extremeIdx ? "  <-- extreme" : ""));
+        Print("=== SLOPE DEBUG (", direction, ", ", copied, " bars) ===\n", dump,
+              "extreme=", extremeIdx, " bars back | now(0)=", DoubleToString(maBuf[0], _Digits),
+              " | slope=", DoubleToString(slope, 2), " points | MinSlopePoints=", DoubleToString(MinSlopePoints, 2));
+    }
+
+    return slope;
 }
 
 //+------------------------------------------------------------------+
