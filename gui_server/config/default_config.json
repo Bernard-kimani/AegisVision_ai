@@ -1,0 +1,31 @@
+{
+    "server": {
+        "host": "127.0.0.1",
+        "port": 5000,
+        "debug": false
+    },
+    "llm": {
+        "provider": "openai",
+        "model": "gpt-4",
+        "api_key_encrypted": "",
+        "max_tokens": 1000,
+        "temperature": 0.1,
+        "timeout": 30
+    },
+    "trading": {
+        "max_position_size": 0.1,
+        "risk_per_trade": 0.02,
+        "confidence_threshold": 0.7,
+        "sliding_window_size": 50
+    },
+    "logging": {
+        "level": "INFO",
+        "max_log_files": 10,
+        "max_file_size_mb": 10
+    },
+    "security": {
+        "api_key_salt": "",
+        "require_api_key": false,
+        "allowed_ips": ["127.0.0.1", "localhost"]
+    }
+}

@@ -1,0 +1,45 @@
+# Secrets
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# PyInstaller build artifacts
+gui_server/build/
+gui_server/dist/
+
+# Logs
+gui_server/logs/*.log
+backtest/*.log
+
+# Audit trail / local storage (personal trading data, not committed)
+gui_server/storage_data/audit_log.jsonl
+gui_server/storage_data/drawdown_state.json
+
+# GUI runtime state (created per-machine when the Strategies tab is used -
+# same category as the audit/drawdown state above)
+gui_server/strategies_store/
+
+# Claude Code agent/skill tooling (not part of this project - installed
+# locally, not project source)
+.claude/
+.agents/
+skills-lock.json
+
+# Backtest run artifacts (regenerated per run, not source)
+backtest/trigger_events.json
+backtest/backtest_report.json
+backtest/backtest_audit_log.jsonl
+backtest/backtest_drawdown_state.json
+
+# Historical seed data (large - XAUUSD_M1.csv alone is ~196MB, over GitHub's
+# 100MB hard push limit). Not re-generatable from code; source separately.
+data_seed/*.csv
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,38 @@
+# Aegisvision_ai Trading Server GUI Requirements
+
+# GUI Framework (tkinter ships with the Python standard library on Windows - not a pip package)
+customtkinter>=5.2.0
+
+# Flask Server
+Flask>=2.3.0
+Flask-CORS>=4.0.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Web Scraping for News Integration
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Cryptography for secure configuration
+cryptography>=41.0.0
+
+# Config / secrets
+pydantic-settings>=2.4.0
+
+# Development and Building
+PyInstaller>=5.13.0
+
+# Optional: For better logging
+colorlog>=6.7.0
+
+# Data Visualization for Multimodal Support
+pandas>=2.0.0
+mplfinance>=0.12.9
+matplotlib>=3.7.0
+
+# Image compositing for the Strategies tab (template thumbnails/stitching, icons)
+Pillow>=10.0.0
+
+# Testing
+pytest>=7.4.0
