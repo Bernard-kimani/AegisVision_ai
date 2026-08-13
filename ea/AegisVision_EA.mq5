@@ -169,73 +169,68 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| Swing-anchored MA slope: finds the peak and trough of the MA     |
-//| line within the last SlopeLookbackBars closed bars, then         |
-//| measures the slope from whichever extremum to the latest closed  |
-//| bar - i.e. the steepness of the MA's *current* leg, not a blind  |
-//| endpoint-to-endpoint average across the whole window. This       |
-//| matters when the MA turned partway through the window (bullish   |
-//| then bearish, or vice versa): the old endpoint formula would      |
-//| have averaged both legs together and understated the real,       |
-//| currently-relevant slope.                                        |
+//| Slope from the relevant swing extremum (trough for BUY, peak for |
+//| SELL) within the last SlopeLookbackBars closed bars, to the      |
+//| latest closed bar - i.e. how steep the MA's move into "now" has  |
+//| been. Direction is a known input here (from touch-side context,  |
+//| see CheckStrategyTrigger below), not derived from the slope      |
+//| itself - so this only ever looks for the one extremum that       |
+//| matters for that direction, not both.                            |
 //|                                                                   |
-//| Returns false if neither leg clears MinSlopePoints (MA is flat/   |
-//| rounding). If both legs independently clear it - only possible   |
-//| with a choppy/wiggly MA that has two separate swings inside the   |
-//| window - the steeper leg wins.                                   |
+//| Returns 0.0 if the current bar itself IS the extreme (no leg to  |
+//| measure yet) - callers compare the result against MinSlopePoints |
+//| so a 0.0 simply fails that check.                                |
 //+------------------------------------------------------------------+
-bool GetSwingAnchoredSlope(string &outDirection, double &outSlopePoints)
+double GetSlopeToNow(string direction)
 {
     int count = SlopeLookbackBars + 1;
     double maBuf[];
-    if(CopyBuffer(maHandle, 0, 1, count, maBuf) <= 0) return false;
+    if(CopyBuffer(maHandle, 0, 1, count, maBuf) <= 0) return 0.0;
     // maBuf[0] = latest closed bar (shift 1); maBuf[i] = i bars before that.
 
-    int peakIdx = 0, troughIdx = 0;
+    int extremeIdx = 0;
     for(int i = 1; i < count; i++)
     {
-        if(maBuf[i] > maBuf[peakIdx])   peakIdx = i;
-        if(maBuf[i] < maBuf[troughIdx]) troughIdx = i;
-    }
-
-    double slopeFromHighPts = (peakIdx > 0)
-        ? (maBuf[0] - maBuf[peakIdx]) / peakIdx / _Point : 0.0;
-    double slopeFromLowPts = (troughIdx > 0)
-        ? (maBuf[0] - maBuf[troughIdx]) / troughIdx / _Point : 0.0;
-
-    bool sellQualifies = (peakIdx > 0)   && (slopeFromHighPts <= -MinSlopePoints);
-    bool buyQualifies  = (troughIdx > 0) && (slopeFromLowPts  >=  MinSlopePoints);
-
-    if(sellQualifies && buyQualifies)
-    {
-        // Rare: a wiggly MA with two independent qualifying legs in the same
-        // window. Steeper leg wins - simplest rule, no extra state needed.
-        if(MathAbs(slopeFromHighPts) >= MathAbs(slopeFromLowPts))
-            { outDirection = "SELL"; outSlopePoints = slopeFromHighPts; }
+        if(direction == "BUY")
+        {
+            if(maBuf[i] < maBuf[extremeIdx]) extremeIdx = i; // trough
+        }
         else
-            { outDirection = "BUY";  outSlopePoints = slopeFromLowPts; }
+        {
+            if(maBuf[i] > maBuf[extremeIdx]) extremeIdx = i; // peak
+        }
     }
-    else if(sellQualifies) { outDirection = "SELL"; outSlopePoints = slopeFromHighPts; }
-    else if(buyQualifies)  { outDirection = "BUY";  outSlopePoints = slopeFromLowPts; }
-    else return false;
-
-    return true;
+    if(extremeIdx == 0) return 0.0; // "now" IS the extreme - no leg to measure
+    return (maBuf[0] - maBuf[extremeIdx]) / extremeIdx / _Point;
 }
 
 //+------------------------------------------------------------------+
-//| STRATEGY TRIGGER: MA slope + touch/rejection pullback            |
-//| continuation. MA type/period are configurable (MA_Method,        |
-//| MA_Period) - defaults to a 20 EMA but nothing here assumes that.  |
+//| STRATEGY TRIGGER: MA touch/rejection pullback continuation.      |
 //|                                                                   |
-//| 1. Slope: the MA must be sharply angled (>= MinSlopePoints,      |
-//|    measured from the window's swing high/low to the latest bar)  |
-//|    - flat/rounding MA lines never trigger. See                  |
-//|    GetSwingAnchoredSlope() below.                                |
-//| 2. Touch: a closed 1-min candle touches/penetrates the MA.       |
-//| 3. Confirmation: that same candle, or one of the next             |
-//|    MaxConfirmationBars candles, closes back beyond the MA in     |
-//|    the trend direction with a real body (not a doji) - i.e. it   |
-//|    "aggressively moves away" rather than chopping through it.    |
+//| 1. Touch-side context: which side of the MA did this candle      |
+//|    approach from? open > MA and low <= MA = an uptrend-side      |
+//|    ("BUY") touch; open < MA and high >= MA = a downtrend-side    |
+//|    ("SELL") touch. Purely positional - slope plays no role here, |
+//|    so a single bearish candle dipping down from above an uptrend |
+//|    can never be mistaken for a fresh SELL context.                |
+//| 2. First confirmation: a candle of the opposite color to the     |
+//|    touch's failure mode (bullish for a BUY touch, bearish for a  |
+//|    SELL touch) closes back on the trend side of the MA, with a  |
+//|    real body (MinBodyPercentOfRange) - same bar as the touch, or |
+//|    any of the next MaxConfirmationBars bars. A same-colored      |
+//|    candle failing to reclaim the MA never counts, no matter how  |
+//|    long it keeps happening - it just leaves the window open (or  |
+//|    lets it expire).                                              |
+//| 3. Slope gate: evaluated exactly once, at the bar that supplies  |
+//|    first confirmation (not cached from the touch bar) - the      |
+//|    steepness from the window's swing extremum to THIS bar must   |
+//|    clear MinSlopePoints. If it doesn't, the cycle is rejected     |
+//|    outright (no trade) and the EA returns to idle, even if bars   |
+//|    remain in the confirmation window.                            |
+//|                                                                   |
+//| Once a touch is pending, direction stays locked to               |
+//| pendingDirection for the whole window - it is never re-derived   |
+//| bar-to-bar while pending.                                        |
 //|                                                                   |
 //| Called once per closed 1-minute bar (see OnTick). Swap this      |
 //| function's body for a different setup later - everything         |
@@ -244,67 +239,68 @@ bool GetSwingAnchoredSlope(string &outDirection, double &outSlopePoints)
 //+------------------------------------------------------------------+
 bool CheckStrategyTrigger(string &outDirection, double &outSlope)
 {
-    string trendDirection = "";
-    double slopePoints = 0.0;
-    if(!GetSwingAnchoredSlope(trendDirection, slopePoints))
-    {
-        // MA has gone flat/rounding, or no leg in the window clears MinSlopePoints -
-        // any pending touch is no longer in a valid trend context
-        pendingTouch = false;
-        return false;
-    }
-    outSlope = slopePoints;
-
     double maAtClose[];
     if(CopyBuffer(maHandle, 0, 1, 1, maAtClose) <= 0) return false;
+    double maValue = maAtClose[0];
 
     MqlRates closedBar[];
     if(CopyRates(_Symbol, PERIOD_M1, 1, 1, closedBar) <= 0) return false;
-    double maValue = maAtClose[0];
-
-    // Trend flipped since the pending touch started - the old touch context is invalid
-    if(pendingTouch && pendingDirection != trendDirection)
-        pendingTouch = false;
-
-    bool touchedNow = (trendDirection == "BUY")
-        ? (closedBar[0].low <= maValue)
-        : (closedBar[0].high >= maValue);
 
     double bodySize = MathAbs(closedBar[0].close - closedBar[0].open);
     double rangeSize = closedBar[0].high - closedBar[0].low;
     bool strongBody = (rangeSize > 0) && (bodySize / rangeSize * 100.0 >= MinBodyPercentOfRange);
+    bool isBullish = closedBar[0].close > closedBar[0].open;
+    bool isBearish = closedBar[0].close < closedBar[0].open;
 
-    bool confirmedNow = strongBody && ((trendDirection == "BUY")
-        ? (closedBar[0].close > maValue && closedBar[0].close > closedBar[0].open)
-        : (closedBar[0].close < maValue && closedBar[0].close < closedBar[0].open));
-
-    // A pending touch from an earlier bar is waiting on this bar to confirm
     if(pendingTouch)
     {
         pendingBarsWaited++;
-        if(confirmedNow)
+
+        bool firstConfirmNow = strongBody && ((pendingDirection == "BUY")
+            ? (isBullish && closedBar[0].close > maValue)
+            : (isBearish && closedBar[0].close < maValue));
+
+        if(firstConfirmNow)
         {
-            outDirection = trendDirection;
+            double slope = GetSlopeToNow(pendingDirection);
             pendingTouch = false;
+            bool slopeOk = (pendingDirection == "BUY") ? (slope >= MinSlopePoints) : (slope <= -MinSlopePoints);
+            if(!slopeOk) return false; // confirmed color/close, but too shallow - reject, back to idle
+            outDirection = pendingDirection;
+            outSlope = slope;
             return true;
         }
+
         if(pendingBarsWaited > MaxConfirmationBars)
-            pendingTouch = false; // confirmation window expired
+            pendingTouch = false; // window expired, no confirming candle appeared
+        return false;
     }
 
-    // Fresh touch this bar - it may confirm immediately (V-shaped rejection) or open a new pending window
-    if(!pendingTouch && touchedNow)
+    // Idle: direction comes only from which side of the MA this candle
+    // approached from - no slope involved yet.
+    bool buyTouch  = (closedBar[0].open > maValue) && (closedBar[0].low  <= maValue);
+    bool sellTouch = (closedBar[0].open < maValue) && (closedBar[0].high >= maValue);
+    if(!buyTouch && !sellTouch) return false;
+    string touchDirection = buyTouch ? "BUY" : "SELL";
+
+    bool firstConfirmNow = strongBody && ((touchDirection == "BUY")
+        ? (isBullish && closedBar[0].close > maValue)
+        : (isBearish && closedBar[0].close < maValue));
+
+    if(firstConfirmNow)
     {
-        if(confirmedNow)
-        {
-            outDirection = trendDirection;
-            return true;
-        }
-        pendingTouch = true;
-        pendingDirection = trendDirection;
-        pendingBarsWaited = 0;
+        // Touch and first confirmation landed on the same bar
+        double slope = GetSlopeToNow(touchDirection);
+        bool slopeOk = (touchDirection == "BUY") ? (slope >= MinSlopePoints) : (slope <= -MinSlopePoints);
+        if(!slopeOk) return false; // confirmed color/close, but too shallow - reject
+        outDirection = touchDirection;
+        outSlope = slope;
+        return true;
     }
 
+    pendingTouch = true;
+    pendingDirection = touchDirection;
+    pendingBarsWaited = 0;
     return false;
 }
 
