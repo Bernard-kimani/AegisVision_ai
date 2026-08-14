@@ -1,0 +1,148 @@
+@import "tailwindcss";
+
+/* Self-hosted (no CDN — this ships inside an offline desktop .exe). */
+@import "@fontsource/fraunces/500.css";
+@import "@fontsource/fraunces/600.css";
+@import "@fontsource/fraunces/600-italic.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/*
+ * Design tokens ported from gui_server/gui/theme/tokens.py + spacing.py,
+ * then given a real typographic identity the CustomTkinter app never had.
+ *
+ * Type system: Fraunces (a warm, high-contrast display serif) carries the
+ * wordmark and page-level moments — a deliberate contrast against IBM Plex
+ * Sans/Mono's cold, engineered UI and data type. The pairing mirrors the
+ * product itself: a discerning judgment layer (Agent 2's vision-compliance
+ * read) sitting on top of a precise mechanical one (the guardrail, the
+ * price feed) — warm judgment over cold instrumentation, literally in the
+ * type. Plex Sans + Plex Mono are IBM's own paired family, so UI labels and
+ * tabular data read as one coherent instrument rather than two typefaces
+ * pasted together.
+ */
+:root {
+  --ground: #f3ede6;
+  --surface: #e9e1d4;
+  --surface-alt: #e2d8c8;
+
+  --border: #d8cdbb;
+  --divider: #000000;
+
+  --text-primary: #0f1a14;
+  --text-secondary: #55605a;
+  --text-disabled: #9a978d;
+
+  --accent: #c6a75e;
+  --accent-hover: #ad8f4e;
+  --accent-pressed: #94793f;
+  --text-on-accent: #0f1a14;
+  --accent-glow: rgb(198 167 94 / 35%);
+
+  --success: #2f8f56;
+  --error: #c14a3a;
+  --warning: #b9812a;
+  --signal-wait: #8a8478;
+
+  color-scheme: light;
+}
+
+.dark {
+  --ground: #121212;
+  --surface: #1a1a1a;
+  --surface-alt: #262626;
+
+  --border: #333333;
+  --divider: #ffffff;
+
+  --text-primary: #f3ede6;
+  --text-secondary: #b9b3a8;
+  --text-disabled: #6b6b6b;
+
+  --accent: #c6a75e;
+  --accent-hover: #d9bd7a;
+  --accent-pressed: #c6a75e;
+  --text-on-accent: #121212;
+  --accent-glow: rgb(198 167 94 / 45%);
+
+  --success: #59b37d;
+  --error: #e2584a;
+  --warning: #e0a53f;
+  --signal-wait: #8a8478;
+
+  color-scheme: dark;
+}
+
+@theme {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+
+  --color-border: var(--border);
+  --color-divider: var(--divider);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-disabled: var(--text-disabled);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-text-on-accent: var(--text-on-accent);
+
+  --color-success: var(--success);
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+  --color-signal-wait: var(--signal-wait);
+
+  --radius-card: 10px;
+
+  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --font-sans: 'IBM Plex Sans', system-ui, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', Consolas, 'DejaVu Sans Mono', monospace;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Tabular figures everywhere numbers appear in data/mono contexts, so
+   columns of stats/timestamps/prices align like a real ticker instead of
+   jittering with proportional digit widths. */
+.font-mono, .tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Live-signal pulse — reserved for the one thing that's actually real-time
+   (the RUNNING status dot). Respects reduced-motion; a steady glow instead
+   of a loop when motion is off. */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 var(--pulse-color, var(--success)); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.animate-pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-ring {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--pulse-color, var(--success));
+  }
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}

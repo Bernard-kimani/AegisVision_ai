@@ -1,7 +1,9 @@
 # Aegisvision_ai Trading Server GUI Requirements
 
-# GUI Framework (tkinter ships with the Python standard library on Windows - not a pip package)
-customtkinter>=5.2.0
+# Desktop shell: embeds the React frontend (frontend/dist) in a native window
+# via the OS's Edge WebView2 engine on Windows. tkinter (stdlib) is still used
+# for the startup-failure error dialog fallback in main.py.
+pywebview>=6.0
 
 # Flask Server
 Flask>=2.3.0

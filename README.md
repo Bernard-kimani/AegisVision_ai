@@ -3,12 +3,13 @@
 A multi-agent LLM trading system for MT5: an Expert Advisor feeds live multi-timeframe
 market data to a Python backend, which runs it through a vision-based strategy-compliance
 filter (Gemini) and a deterministic risk guardrail before sending a trade decision back
-to MT5. Includes a desktop GUI (CustomTkinter) and an offline backtest replay harness.
+to MT5. Includes a desktop GUI (React, packaged with pywebview) and an offline backtest
+replay harness.
 
 Forked from an earlier prototype (`orb_ai_strategy`), restructured into a clearer
 4-agent pipeline:
 
-```
+```text
 MT5 EA (Agent 0)  --candles+indicators-->  Ingestor (Agent 1)
                                                  |
                                     text summary + chart image
@@ -32,13 +33,15 @@ MT5 EA (Agent 0)  --candles+indicators-->  Ingestor (Agent 1)
   executes trades, manages open positions. The actual entry-trigger strategy is a
   placeholder (`ShouldEvaluateSetup()`) - swap its body for your real strategy logic;
   everything downstream already works.
-- `gui_server/` - the desktop app: CustomTkinter GUI + embedded Flask backend.
-  - `gui/` - GUI tabs (Configuration, Server Control, Templates, Backtest, Logs).
+- `gui_server/` - the desktop app: a React frontend packaged with pywebview + embedded Flask backend.
+  - `frontend/` - the React/TypeScript/Tailwind UI (Controls, Strategies, Backtest, Logs tabs).
+  - `webview_api.py` - the GUI-facing control surface exposed to the frontend as `window.pywebview.api.*`.
   - `server/agents/` - the three Python agents (`ingestor.py`, `vision_compliance.py`, `guardrail.py`).
   - `server/llm/` - pluggable LLM provider interface (Gemini wired up; OpenAI/Anthropic stubbed).
   - `storage/` - local-file storage interfaces (prompts, template images) designed to be
     swapped for a Supabase-backed implementation later without touching the agents.
-  - `templates_store/` - your uploaded 2-shot reference chart images (via the Templates tab).
+  - `templates_store/` - legacy global reference chart images, from before the Strategies tab
+    (per-strategy templates now live under `strategies_store/{id}/templates/`).
   - `storage_data/` - audit log (JSONL, one record per trade decision), saved prompt versions,
     daily-drawdown state. Not committed to git - this is your personal trading history.
 - `backtest/` - offline replay harness: extracts historical trigger events from the seed
@@ -52,25 +55,42 @@ MT5 EA (Agent 0)  --candles+indicators-->  Ingestor (Agent 1)
 ## Setup
 
 1. **Python environment**
-   ```
+
+   ```bat
    python -m venv venv
    venv\Scripts\pip install -r gui_server\requirements.txt
    ```
 
-2. **API key** - copy `.env.example` to `.env` and fill in your Gemini key:
+2. **Frontend build** (one-time, and again after pulling frontend changes)
+
+   ```bat
+   cd gui_server\frontend
+   npm install
+   npm run build
+   cd ..\..
    ```
+
+   For UI development with hot-reload instead: `npm run dev` in `gui_server/frontend`, then
+   run the app with the `AEGISVISION_DEV=1` env var set (step 4) so it points at the Vite
+   dev server instead of the built `frontend/dist`.
+
+3. **API key** - copy `.env.example` to `.env` and fill in your Gemini key:
+
+   ```bash
    GEMINI_API_KEY=your-key-here
    ```
+
    `.env` is gitignored - never commit it.
 
-3. **Run the desktop app**
-   ```
+4. **Run the desktop app**
+
+   ```bat
    venv\Scripts\python gui_server\main.py
    ```
-   Go to the **Configuration** tab, confirm host/port/provider, then **Server Control** ->
-   Start Server.
 
-4. **MT5 setup**
+   Go to the **Controls** tab, confirm host/port/provider, then **Start Server**.
+
+5. **MT5 setup**
    - Open MetaEditor, compile `ea/AegisVision_EA.mq5`, attach it to a chart (demo account
      recommended while testing).
    - **Required one-time step per machine**: in MT5, Tools -> Options -> Expert Advisors ->
@@ -78,19 +98,21 @@ MT5 EA (Agent 0)  --candles+indicators-->  Ingestor (Agent 1)
      host:port you configured). Without this, `WebRequest` silently fails - the EA can't
      self-configure this.
    - Leave `EnableTrading = false` until you've confirmed signals look sane in the GUI's
-     Server Control / Logs tabs, then flip it on.
+     Controls / Logs tabs, then flip it on.
 
-5. **Templates** (optional but recommended) - go to the **Templates** tab and upload your
-   "gold standard" reference charts (ideal bullish setup, ideal bearish setup, a fail/trap
-   setup to avoid) with captions. Without these, Agent 2 still works (text + live chart
-   only) but is less calibrated to your specific strategy.
+6. **Strategies** (optional but recommended) - go to the **Strategies** tab, create a
+   strategy, and upload your "gold standard" reference charts (ideal bullish setup, ideal
+   bearish setup, a fail/trap setup to avoid) with captions, plus tune the Agent 2 prompt.
+   Without these, Agent 2 still works (text + live chart only) but is less calibrated to
+   your specific strategy.
 
 ## Backtesting
 
-```
+```bat
 venv\Scripts\python backtest\extract_triggers.py --start-date 2018-02-01 --end-date 2018-03-01 --interval-minutes 60 --max-events 100
 venv\Scripts\python backtest\replay_harness.py --throttle-seconds 12
 ```
+
 Or use the **Backtest** tab in the GUI, which runs the same scripts and shows the
 before/after metrics table. Each event makes a real (throttled) Gemini call, so a few
 hundred events will take a while - this is intentional, not a bug, to respect API rate
@@ -107,6 +129,5 @@ limits.
   `anthropic_provider.py` are stubbed against the same `LLMProvider` interface for later.
 - **Supabase migration**: `storage/prompt_store.py` and `storage/template_image_store.py`
   are local-file implementations behind an interface designed for this; a Supabase-backed
-  implementation (and eventually a web dashboard) is a contained addition, not a rewrite.
-- **PyInstaller packaging**: `gui_server/aegisvision_server.spec` / `build_exe.bat` are
-  updated and ready but not yet run end-to-end into a distributable .exe.
+  implementation is a contained addition, not a rewrite (`storage/supabase_sync.py` is
+  currently a no-op stub).

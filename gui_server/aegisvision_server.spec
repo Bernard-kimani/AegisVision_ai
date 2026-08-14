@@ -13,16 +13,14 @@ block_cipher = None
 current_dir = os.path.dirname(os.path.abspath(SPEC))
 
 # Define paths
-gui_dir = os.path.join(current_dir, 'gui')
 server_dir = os.path.join(current_dir, 'server')
 storage_dir = os.path.join(current_dir, 'storage')
 assets_dir = os.path.join(current_dir, 'assets')
 config_dir = os.path.join(current_dir, 'config')
+frontend_dist_dir = os.path.join(current_dir, 'frontend', 'dist')
 
 # Data files to include
 datas = [
-    # GUI modules
-    (gui_dir, 'gui'),
     # Server modules
     (server_dir, 'server'),
     # Storage interfaces (PromptStore/TemplateImageStore local implementations)
@@ -34,6 +32,17 @@ datas = [
 if os.path.isdir(assets_dir):
     datas.append((assets_dir, 'assets'))
 
+# React frontend build output - NOT optional. main.py's frontend_url() loads
+# frontend/dist/index.html when frozen; a build with no compiled frontend is
+# a broken build, not a build with a missing extra. Run `npm run build`
+# inside frontend/ (or let build_exe.bat do it) before building this spec.
+if not os.path.isdir(frontend_dist_dir):
+    raise SystemExit(
+        "frontend/dist not found - run 'npm install && npm run build' inside "
+        "gui_server/frontend/ before building this spec (build_exe.bat does this automatically)."
+    )
+datas.append((frontend_dist_dir, 'frontend/dist'))
+
 # NOTE: templates_store/ and storage_data/ (audit log, saved prompts, uploaded
 # template images) are deliberately NOT bundled here - they are the user's
 # persistent runtime data, created next to the .exe on first run (see
@@ -44,24 +53,14 @@ hiddenimports = [
     # App-level
     'app_paths',
     'active_strategy',
+    'webview_api',
 
-    # GUI modules
-    'gui.main_window',
-    'gui.controls_tab',
-    'gui.logs_tab',
-    'gui.strategies_tab',
-    'gui.backtest_tab',
-    'gui.theme',
-    'gui.theme.tokens',
-    'gui.theme.fonts',
-    'gui.theme.spacing',
-    'gui.theme.layout',
-    'gui.theme.icons',
-    'gui.widgets',
-    'gui.widgets.crop_dialog',
-    'gui.widgets.new_strategy_dialog',
-    'gui.widgets.strategy_slot_card',
-    'gui.widgets.prompt_section',
+    # Desktop shell (embeds frontend/dist in a native window)
+    'webview',
+    'webview.platforms.winforms',
+    'webview.platforms.edgechromium',
+    'clr_loader',
+    'pythonnet',
 
     # Server modules
     'server.trading_server',
@@ -99,12 +98,12 @@ hiddenimports = [
     'jinja2.ext',
     'markupsafe',
 
-    # CustomTkinter dependencies
-    'customtkinter',
+    # tkinter.messagebox: main.py's startup-failure error dialog fallback only
+    # - not a GUI framework here, just a last-resort crash dialog.
     'tkinter',
-    'tkinter.ttk',
-    'tkinter.filedialog',
     'tkinter.messagebox',
+    # PIL: server-side template compositing (storage/template_compositor.py)
+    # still runs regardless of GUI framework.
     'PIL',
     'PIL.Image',
 

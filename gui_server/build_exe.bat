@@ -42,6 +42,29 @@ echo.
 echo Dependencies installed successfully!
 echo.
 
+echo Building React frontend...
+echo.
+pushd frontend
+call npm install
+if %errorlevel% neq 0 (
+    echo ERROR: npm install failed in frontend\
+    popd
+    pause
+    exit /b 1
+)
+call npm run build
+if %errorlevel% neq 0 (
+    echo ERROR: Frontend build failed
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+echo.
+echo Frontend built successfully!
+echo.
+
 REM Clean previous builds
 if exist "build" (
     echo Cleaning previous build directory...
