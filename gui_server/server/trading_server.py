@@ -8,9 +8,12 @@ itself - see agents/ingestor.py, agents/vision_compliance.py, agents/guardrail.p
     /analyze  ->  Ingestor.ingest_*()  ->  VisionComplianceFilter.evaluate()  ->  RiskGuardrail.evaluate()  ->  EA-compatible JSON
 """
 
+import json
 import logging
 import os
 import sys
+import threading
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,6 +52,12 @@ logger = logging.getLogger(__name__)
 # folder - otherwise audit logs/prompts/templates would vanish between runs
 # of a packaged build.
 STORAGE_DATA_DIR = os.path.join(get_app_root(), "storage_data")
+
+# Latest EA heartbeat snapshot (liveness + open-position P&L), overwritten in
+# place on every /heartbeat call - not an audit trail, just current state, so
+# a single mutable file (unlike the append-only audit_log.jsonl) is correct.
+HEARTBEAT_STATE_PATH = os.path.join(STORAGE_DATA_DIR, "heartbeat_state.json")
+_heartbeat_lock = threading.Lock()
 
 
 def default_config() -> Dict[str, Any]:
@@ -149,6 +158,28 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
             "model": cfg["llm"]["model"],
             "active_connections": len(window_manager.get_all_connections()),
         })
+
+    @app.route('/heartbeat', methods=['POST'])
+    def heartbeat():
+        # Lightweight liveness + open-position P&L ping, sent by the EA every
+        # few seconds independent of whether a trade setup has actually
+        # fired - no LLM call, no sliding-window/guardrail involvement. This
+        # is what lets the GUI show "EA connected" and live floating P&L even
+        # during the long stretches between real /analyze evaluations.
+        try:
+            data = request.get_json(force=True, silent=True) or {}
+            snapshot = {
+                "symbol": data.get("symbol", ""),
+                "open_trades": data.get("open_trades", []),
+                "last_seen": datetime.now().isoformat(),
+            }
+            with _heartbeat_lock:
+                with open(HEARTBEAT_STATE_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(snapshot, f)
+            return jsonify({"status": "ok"})
+        except Exception as e:
+            logger.error(f"Heartbeat error: {e}")
+            return jsonify({"status": "error"}), 400
 
     @app.route('/analyze', methods=['POST'])
     def analyze_endpoint():
@@ -328,6 +359,7 @@ def _run_pipeline(
     vision_compliance: VisionComplianceFilter,
     guardrail: RiskGuardrail,
 ) -> Dict[str, Any]:
+    pipeline_t0 = time.perf_counter()
     open_trades = request_data.get('open_trades', [])
 
     payload = ingestor.build_dynamic_payload(symbol, open_trades=open_trades, chart_timeframe="M1")
@@ -340,6 +372,7 @@ def _run_pipeline(
     # on them.
     trigger_metrics = ingestor.compute_trigger_metrics(symbol, trigger_direction)
 
+    llm_t0 = time.perf_counter()
     verdict = vision_compliance.evaluate(
         payload.market_summary_text,
         payload.chart_image_b64,
@@ -349,6 +382,7 @@ def _run_pipeline(
         risk_reward_ratio=trigger_metrics.risk_reward if trigger_metrics else None,
         higher_timeframe_bias=trigger_metrics.higher_timeframe_bias if trigger_metrics else None,
     )
+    llm_ms = (time.perf_counter() - llm_t0) * 1000
 
     current_price = _latest_close_price(ingestor, symbol)
 
@@ -371,6 +405,9 @@ def _run_pipeline(
     reasoning = verdict.reasoning
     if result.vetoed:
         reasoning = f"{reasoning} [GUARDRAIL VETO: {result.veto_reason}]"
+
+    total_ms = (time.perf_counter() - pipeline_t0) * 1000
+    logger.info(f"timing symbol={symbol} llm_ms={llm_ms:.0f} total_ms={total_ms:.0f}")
 
     # Trade management (position_suggestions) is not yet implemented as its own
     # concern - Agent 2 filters NEW setups, it doesn't review existing positions.

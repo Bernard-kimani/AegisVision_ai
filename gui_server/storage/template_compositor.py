@@ -14,34 +14,39 @@ from typing import List, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-CANVAS_SIZE = (1000, 1000)
+CANVAS_SIZE = (1024, 768)  # 4:3 -- matches the JPEG the composite is saved as
 GUTTER = 6
 GUTTER_COLOR = (128, 128, 128)
 NUMERAL_BADGE_COLOR = (0, 0, 0)
 NUMERAL_TEXT_COLOR = (255, 255, 255)
 
-_HALF = (CANVAS_SIZE[0] - 3 * GUTTER) // 2  # 491 on a 1000px canvas
+_W, _H = CANVAS_SIZE
+_HALF_W = (_W - 3 * GUTTER) // 2
+_HALF_H = (_H - 3 * GUTTER) // 2
 
 # One cell per possible sub-image position (0-3), keyed by how many images
-# the slot currently holds. Cells are filled in position order.
+# the slot currently holds. Cells are filled in position order. Width and
+# height halves are computed independently since the canvas isn't square --
+# reusing one "_HALF" for both axes (as a square canvas would allow) would
+# distort every multi-image layout.
 CELL_LAYOUTS = {
     1: [
-        (GUTTER, GUTTER, CANVAS_SIZE[0] - 2 * GUTTER, CANVAS_SIZE[1] - 2 * GUTTER),
+        (GUTTER, GUTTER, _W - 2 * GUTTER, _H - 2 * GUTTER),
     ],
     2: [
-        (GUTTER, GUTTER, _HALF, CANVAS_SIZE[1] - 2 * GUTTER),
-        (GUTTER + _HALF + GUTTER, GUTTER, _HALF, CANVAS_SIZE[1] - 2 * GUTTER),
+        (GUTTER, GUTTER, _HALF_W, _H - 2 * GUTTER),
+        (GUTTER + _HALF_W + GUTTER, GUTTER, _HALF_W, _H - 2 * GUTTER),
     ],
     3: [
-        (GUTTER, GUTTER, CANVAS_SIZE[0] - 2 * GUTTER, _HALF),
-        (GUTTER, GUTTER + _HALF + GUTTER, _HALF, _HALF),
-        (GUTTER + _HALF + GUTTER, GUTTER + _HALF + GUTTER, _HALF, _HALF),
+        (GUTTER, GUTTER, _W - 2 * GUTTER, _HALF_H),
+        (GUTTER, GUTTER + _HALF_H + GUTTER, _HALF_W, _HALF_H),
+        (GUTTER + _HALF_W + GUTTER, GUTTER + _HALF_H + GUTTER, _HALF_W, _HALF_H),
     ],
     4: [
-        (GUTTER, GUTTER, _HALF, _HALF),
-        (GUTTER + _HALF + GUTTER, GUTTER, _HALF, _HALF),
-        (GUTTER, GUTTER + _HALF + GUTTER, _HALF, _HALF),
-        (GUTTER + _HALF + GUTTER, GUTTER + _HALF + GUTTER, _HALF, _HALF),
+        (GUTTER, GUTTER, _HALF_W, _HALF_H),
+        (GUTTER + _HALF_W + GUTTER, GUTTER, _HALF_W, _HALF_H),
+        (GUTTER, GUTTER + _HALF_H + GUTTER, _HALF_W, _HALF_H),
+        (GUTTER + _HALF_W + GUTTER, GUTTER + _HALF_H + GUTTER, _HALF_W, _HALF_H),
     ],
 }
 
@@ -68,7 +73,7 @@ def composite_slot_images(cropped_sources: List[Tuple[Image.Image, int]]) -> Ima
     ordered = sorted(cropped_sources, key=lambda pair: pair[1])
     layout = CELL_LAYOUTS.get(max(1, min(len(ordered), 4)), CELL_LAYOUTS[4])
 
-    canvas = Image.new("RGB", CANVAS_SIZE, GUTTER_COLOR)
+    canvas = Image.new("RGB", CANVAS_SIZE, GUTTER_COLOR)  # RGB, not RGBA -- required for JPEG output
     draw = ImageDraw.Draw(canvas)
 
     for index, (img, _position) in enumerate(ordered):

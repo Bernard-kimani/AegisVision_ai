@@ -209,8 +209,11 @@ class ServerManager:
     def validate_config(self, config: Dict) -> bool:
         """Validate server configuration"""
         try:
-            # Debug: Print the config being validated
-            logger.info(f"Validating config: {config}")
+            # Never log the raw config - it carries the plaintext API key,
+            # and this log file is user-readable (and tail-able/exportable
+            # from the GUI's own Logs tab).
+            safe_config = {**config, "api_key": "***" if config.get("api_key") else "(empty)"}
+            logger.info(f"Validating config: {safe_config}")
             
             # Check required fields
             required_fields = ["host", "port", "llm_provider", "api_key"]

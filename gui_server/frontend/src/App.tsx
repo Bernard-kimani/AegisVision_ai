@@ -41,14 +41,29 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-ground text-text-primary">
-      <header className="flex items-center justify-between px-6 py-4 shrink-0">
-        <h1 className="text-[22px] leading-none" style={{ fontFamily: 'var(--font-display)' }}>
+      <header className="grid grid-cols-3 items-center px-6 py-3.5 shrink-0">
+        <h1 className="justify-self-start text-[22px] leading-none" style={{ fontFamily: 'var(--font-display)' }}>
           <span className="font-medium">AegisVision</span>{' '}
           <span className="italic font-semibold text-accent">AI</span>
         </h1>
+
+        <nav className="flex justify-self-center gap-6">
+          {TABS.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`border-b-2 pb-1 text-[11px] font-semibold tracking-[0.14em] uppercase transition-colors focus-visible:outline-none ${
+                tab === t ? 'border-accent text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </nav>
+
         <button
           onClick={() => setDrawerOpen(true)}
-          className="p-2 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-alt transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="justify-self-end p-2 rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-alt transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           aria-label="Settings"
         >
           <Settings size={18} />
@@ -59,21 +74,6 @@ export default function App() {
           while the server is actually live, echoing the app's one real-time
           signal instead of decorating unconditionally. */}
       <div className={`h-px shrink-0 transition-colors duration-700 ${running ? 'bg-accent' : 'bg-divider/15'}`} />
-
-      <nav className="flex gap-6 px-6 pt-4 shrink-0">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`pb-3 text-[11px] font-semibold tracking-[0.14em] uppercase border-b-2 -mb-px transition-colors focus-visible:outline-none ${
-              tab === t ? 'border-accent text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
-      <div className="h-px bg-divider/15 shrink-0" />
 
       <main className="flex-1 overflow-auto p-6">
         {tab === 'Controls' && <ControlsPage onStatusMessage={setStatusMessage} />}

@@ -39,6 +39,14 @@ input int       WebRequestTimeout = 30000;         // Web request timeout in mil
 input bool      EnableTrading = false;             // Enable actual trading (start with false!)
 input int       MagicNumber = 12345;               // Magic number for trades
 
+input group "=== Liveness Heartbeat (server mode only) ==="
+// Independent of the trigger/analyze path - a tiny ping sent on a fixed
+// timer (not tied to ticks or bar closes) so the GUI can show "EA
+// connected" and live open-position P&L even during the long stretches
+// between real trade evaluations. Never calls the LLM.
+input string    HeartbeatURL = "http://127.0.0.1:8080/heartbeat";  // Heartbeat endpoint (ignored when BypassLLM = true)
+input int       HeartbeatIntervalSeconds = 10;     // How often to send the heartbeat
+
 input group "=== Bulk Historical Data (server mode only) ==="
 input bool      EnableBulkLoad = true;             // Enable bulk historical data loading (ignored when BypassLLM = true)
 input int       BulkLoad1MinCount = 360;           // 6 hours of 1-min candles
@@ -122,6 +130,7 @@ int OnInit()
 
     Print("LLM Trading EA with Sliding Window v5.0 initialized");
     Print("Python Server URL: ", PythonServerURL);
+    Print("Heartbeat URL: ", HeartbeatURL, " (every ", HeartbeatIntervalSeconds, "s)");
     Print("Trading Enabled: ", EnableTrading ? "YES" : "NO");
     Print("Mode: ", BypassLLM ? "STANDALONE (no server contact - MT5 Strategy Tester)" : "LLM-filtered (contacts Python server)");
     // ... rest of init
@@ -155,6 +164,13 @@ int OnInit()
         isInitialLoadComplete = true; // Skip bulk load
     }
 
+    // Heartbeat runs on its own timer, not off ticks/bar-closes, so it keeps
+    // firing even on a quiet symbol with no price movement - that's the
+    // whole point of it as a liveness signal. No server to ping in
+    // standalone mode.
+    if(!BypassLLM)
+        EventSetTimer(HeartbeatIntervalSeconds);
+
     return(INIT_SUCCEEDED);
 }
 
@@ -163,10 +179,21 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+    EventKillTimer();
     if(maHandle != INVALID_HANDLE)
         IndicatorRelease(maHandle);
     Print("LLM Trading EA with Sliding Window v5.0 deinitialized");
     Print("Connection ID was: ", connectionId);
+}
+
+//+------------------------------------------------------------------+
+//| Timer tick - sends the liveness/open-positions heartbeat         |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+    if(BypassLLM)
+        return;
+    SendHeartbeat();
 }
 
 //+------------------------------------------------------------------+
@@ -766,8 +793,54 @@ string SendDataToPython(string data)
     // Convert result to string
     string responseStr = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
     Print("Response: ", responseStr);
-    
+
     return responseStr;
+}
+
+//+------------------------------------------------------------------+
+//| Send the liveness/open-positions heartbeat. Fire-and-forget on   |
+//| purpose - unlike SendDataToPython(), this never logs the full    |
+//| request/response every call (it fires every ~10s forever, so     |
+//| that would flood the Experts log) and a failure here is not a    |
+//| trading-relevant error, just a missed heartbeat.                 |
+//+------------------------------------------------------------------+
+void SendHeartbeat()
+{
+    string json = "{";
+    json += "\"symbol\":\"" + _Symbol + "\",";
+    json += "\"connection_id\":\"" + connectionId + "\",";
+    json += GetOpenTradesInfo();
+    json += "}";
+
+    char postData[];
+    char result[];
+    string headers = "Content-Type: application/json\r\n";
+
+    int charCount = StringToCharArray(json, postData, 0, WHOLE_ARRAY, CP_UTF8);
+    int dataLen = charCount - 1;
+    if(dataLen <= 0)
+        return;
+    ArrayResize(postData, dataLen);
+
+    int response = WebRequest(
+        "POST",
+        HeartbeatURL,
+        headers,
+        WebRequestTimeout,
+        postData,
+        result,
+        headers
+    );
+
+    if(response == -1)
+    {
+        static datetime lastHeartbeatErrorPrint = 0;
+        if(TimeCurrent() - lastHeartbeatErrorPrint >= 60)
+        {
+            Print("Heartbeat WebRequest error: ", GetLastError(), " (suppressing repeats for 60s)");
+            lastHeartbeatErrorPrint = TimeCurrent();
+        }
+    }
 }
 
 //+------------------------------------------------------------------+

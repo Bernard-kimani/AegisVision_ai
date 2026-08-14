@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getApi } from '../../api/client'
 import type { FlatConfig } from '../../api/types'
-import { Button, Section, Select, SignalChip, StatTile, StatusDot, TextField } from '../../components/primitives'
+import { Button, PositionRow, Section, Select, SignalRow, StatusDot, TextField } from '../../components/primitives'
 import { MODELS_BY_PROVIDER } from './models'
 
 const DEFAULTS: FlatConfig = {
@@ -28,6 +28,12 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
   })
   const { data: signalsResp } = useQuery({
     queryKey: ['signals'], queryFn: async () => (await getApi()).get_recent_signals(0), refetchInterval: 2000,
+  })
+  const { data: telemetry } = useQuery({
+    queryKey: ['trade-telemetry'], queryFn: async () => (await getApi()).get_trade_telemetry(), refetchInterval: 5000,
+  })
+  const { data: livePositions } = useQuery({
+    queryKey: ['live-positions'], queryFn: async () => (await getApi()).get_live_positions(), refetchInterval: 3000,
   })
 
   useEffect(() => {
@@ -82,101 +88,148 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
   const running = status?.is_running ?? false
   const models = MODELS_BY_PROVIDER[form.llm_provider] ?? []
 
+  const lastDecisionLabel = telemetry?.last_decision_time
+    ? new Date(telemetry.last_decision_time).toLocaleTimeString()
+    : 'None yet'
+
+  // Heartbeats land every ~10s (see the EA's HeartbeatIntervalSeconds) -
+  // three missed cycles is a reasonable "actually disconnected" threshold,
+  // rather than flickering on every single delayed tick.
+  const eaConnected = (livePositions?.seconds_since ?? Infinity) < 30
+  const heartbeatLabel = livePositions?.seconds_since == null
+    ? null
+    : livePositions.seconds_since < 60
+      ? `${Math.round(livePositions.seconds_since)}s ago`
+      : `${Math.round(livePositions.seconds_since / 60)}m ago`
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-      <div className="lg:col-span-3 flex flex-col">
-        <Section title="Server Settings">
-          <div className="flex flex-wrap items-end gap-3">
-            <TextField label="Host" mono value={form.host} onChange={(e) => set('host', e.target.value)} className="w-40" />
-            <TextField label="Port" mono value={form.port} onChange={(e) => set('port', e.target.value)} className="w-24" />
-            <Button onClick={() => testConnMutation.mutate()} disabled={testConnMutation.isPending}>Test Connection</Button>
-          </div>
-          {connMsg && <p className="text-xs text-text-secondary mt-2">{connMsg}</p>}
-        </Section>
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_0.85fr] gap-6 items-start">
+        <div className="flex flex-col">
+          <Section title="AI Configuration">
+            <div className="flex flex-col gap-3">
+              <Select
+                label="Provider" value={form.llm_provider}
+                onChange={(e) => { set('llm_provider', e.target.value); set('model', MODELS_BY_PROVIDER[e.target.value]?.[0] ?? '') }}
+              >
+                {Object.keys(MODELS_BY_PROVIDER).map((p) => <option key={p} value={p}>{p}</option>)}
+              </Select>
+              <Select label="Model" value={form.model} onChange={(e) => set('model', e.target.value)}>
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </Select>
+              <TextField
+                label="API Key" mono type="password" autoComplete="off" value={form.api_key}
+                onChange={(e) => set('api_key', e.target.value)} placeholder="Enter your API key..."
+              />
+              <Button onClick={() => testApiMutation.mutate()} disabled={testApiMutation.isPending} className="self-start">Test API</Button>
+              {apiMsg && <p className="text-xs text-text-secondary">{apiMsg}</p>}
+              <TextField label="Temperature" mono value={form.temperature} onChange={(e) => set('temperature', e.target.value)} className="w-28" />
+            </div>
+          </Section>
+        </div>
 
-        <Section title="AI Configuration">
-          <div className="flex flex-wrap items-end gap-3">
-            <Select
-              label="Provider" value={form.llm_provider} className="w-40"
-              onChange={(e) => { set('llm_provider', e.target.value); set('model', MODELS_BY_PROVIDER[e.target.value]?.[0] ?? '') }}
-            >
-              {Object.keys(MODELS_BY_PROVIDER).map((p) => <option key={p} value={p}>{p}</option>)}
-            </Select>
-            <Select label="Model" value={form.model} className="w-56" onChange={(e) => set('model', e.target.value)}>
-              {models.map((m) => <option key={m} value={m}>{m}</option>)}
-            </Select>
-          </div>
-          <div className="flex flex-wrap items-end gap-3 mt-3">
-            <TextField label="API Key" mono type="password" value={form.api_key} onChange={(e) => set('api_key', e.target.value)} className="w-72" placeholder="Enter your API key..." />
-            <Button onClick={() => testApiMutation.mutate()} disabled={testApiMutation.isPending}>Test API</Button>
-          </div>
-          {apiMsg && <p className="text-xs text-text-secondary mt-2">{apiMsg}</p>}
-          <div className="flex flex-wrap items-end gap-3 mt-3">
-            <TextField label="Temperature" mono value={form.temperature} onChange={(e) => set('temperature', e.target.value)} className="w-20" />
-            <TextField label="Max Tokens" mono value={form.max_tokens} onChange={(e) => set('max_tokens', e.target.value)} className="w-24" />
-          </div>
-        </Section>
+        {/* Telemetry — one continuous section (label/value pairs directly on
+            the page background) rather than a grid of bordered StatTiles,
+            so it reads as a single instrument panel instead of a pile of cards. */}
+        <div className="flex flex-col lg:border-l lg:border-divider/15 lg:pl-6">
+          <Section title="Telemetry">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+              <div>
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Active Conns</div>
+                <div className="text-base font-mono tabular-nums font-medium mt-1">{stats?.active_connections ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Uptime</div>
+                <div className="text-base font-mono tabular-nums font-medium mt-1">{stats?.uptime ?? 'Not running'}</div>
+              </div>
 
-        <Section title="Trading Parameters">
-          <div className="flex flex-wrap items-end gap-3">
-            <TextField label="Min Confidence (%)" mono value={form.min_confidence} onChange={(e) => set('min_confidence', e.target.value)} className="w-20" />
-            <TextField label="Min Risk:Reward" mono value={form.min_risk_reward} onChange={(e) => set('min_risk_reward', e.target.value)} className="w-20" />
-            <TextField label="Max Spread (pips)" mono value={form.max_spread} onChange={(e) => set('max_spread', e.target.value)} className="w-20" />
-            <TextField label="Max Trades" mono value={form.max_trades} onChange={(e) => set('max_trades', e.target.value)} className="w-20" />
-          </div>
-        </Section>
+              <div className="col-span-2">
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Total Requests</div>
+                <div className="text-3xl font-mono tabular-nums font-semibold text-accent mt-1">{stats?.total_requests ?? 0}</div>
+              </div>
 
-        <Section title="Configuration Management">
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>Save Configuration</Button>
-            <Button onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>Load Configuration</Button>
-            <Button onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending}>Reset to Defaults</Button>
-            <Button onClick={() => exportMutation.mutate()} disabled={exportMutation.isPending}>Export Config File</Button>
-          </div>
-          {dirty && <p className="text-xs text-warning mt-2">Unsaved changes</p>}
-        </Section>
+              <div className="col-span-2 h-px bg-divider/15" />
+
+              <div>
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Approved Trades</div>
+                <div className="text-base font-mono tabular-nums font-medium text-success mt-1">{telemetry?.approved ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Filtered / Rejected</div>
+                <div className="text-base font-mono tabular-nums font-medium text-warning mt-1">{telemetry?.rejected ?? 0}</div>
+              </div>
+              <div className="col-span-2">
+                <div className="text-[10px] tracking-widest uppercase text-text-secondary">Last Decision</div>
+                <div className="text-base font-mono tabular-nums font-medium mt-1">{lastDecisionLabel}</div>
+              </div>
+            </div>
+          </Section>
+        </div>
+
+        {/* Server Engine, back on the right where it started. */}
+        <div className="flex flex-col lg:border-l lg:border-divider/15 lg:pl-6">
+          <Section title="Server Engine">
+            <p className="flex items-center gap-2.5 text-sm mb-1">
+              <StatusDot live={running} color={running ? 'success' : 'error'} />
+              <span className={`font-mono font-medium tracking-wide ${running ? 'text-success' : 'text-error'}`}>
+                {running ? 'RUNNING' : 'STOPPED'}
+              </span>
+            </p>
+            <p className="text-[11px] font-mono text-text-disabled mb-3 h-4">{running ? status?.url : ''}</p>
+            <div className="flex flex-col gap-3">
+              <TextField label="Host" mono value={form.host} onChange={(e) => set('host', e.target.value)} />
+              <TextField label="Port" mono value={form.port} onChange={(e) => set('port', e.target.value)} />
+              <Button onClick={() => testConnMutation.mutate()} disabled={testConnMutation.isPending} className="self-start">Test Connection</Button>
+              {connMsg && <p className="text-xs text-text-secondary">{connMsg}</p>}
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <Button variant="success" disabled={running || startMutation.isPending} onClick={() => startMutation.mutate()}>Start</Button>
+              <Button variant="danger" disabled={!running || stopMutation.isPending} onClick={() => stopMutation.mutate()}>Stop</Button>
+              <Button variant="warning" disabled={!running || restartMutation.isPending} onClick={() => restartMutation.mutate()}>Restart</Button>
+              <Button onClick={() => healthMutation.mutate()} disabled={healthMutation.isPending}>Health Check</Button>
+            </div>
+          </Section>
+        </div>
       </div>
 
-      <div className="lg:col-span-2 flex flex-col">
-        <Section title="Server Status">
-          <p className="flex items-center gap-2.5 text-sm">
-            <StatusDot live={running} color={running ? 'success' : 'error'} />
-            <span className={`font-mono font-medium tracking-wide ${running ? 'text-success' : 'text-error'}`}>
-              {running ? 'RUNNING' : 'STOPPED'}
-            </span>
-            <span className="text-text-secondary">{running ? `— accepting requests on ${status?.url}` : '— not running'}</span>
-          </p>
-        </Section>
-
-        <Section title="Server Control">
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="success" pill disabled={running || startMutation.isPending} onClick={() => startMutation.mutate()}>Start Server</Button>
-            <Button variant="danger" pill disabled={!running || stopMutation.isPending} onClick={() => stopMutation.mutate()}>Stop Server</Button>
-            <Button variant="warning" pill disabled={!running || restartMutation.isPending} onClick={() => restartMutation.mutate()}>Restart</Button>
-            <Button pill onClick={() => healthMutation.mutate()} disabled={healthMutation.isPending}>Health Check</Button>
-          </div>
-        </Section>
-
-        <Section title="Server Statistics">
-          <div className="grid grid-cols-2 gap-2">
-            <StatTile label="Active Connections" value={String(stats?.active_connections ?? 0)} />
-            <StatTile label="Server Uptime" value={stats?.uptime ?? 'Not running'} />
-            <StatTile label="Total Requests Today" value={String(stats?.total_requests ?? 0)} />
-            <StatTile label="Last Request" value={stats?.last_request_time ?? 'None'} />
-          </div>
-        </Section>
+      <div className="flex flex-wrap items-center gap-2">
+        {dirty && <span className="text-xs text-warning mr-auto">Unsaved changes</span>}
+        <Button onClick={() => resetMutation.mutate()} disabled={resetMutation.isPending}>Reset Defaults</Button>
+        <Button onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>Load Configuration</Button>
+        <Button onClick={() => exportMutation.mutate()} disabled={exportMutation.isPending}>Export Config File</Button>
+        <Button variant="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>Save Changes</Button>
       </div>
 
-      <div className="lg:col-span-5">
-        <Section title="Recent Trading Signals">
-          <div className="flex gap-3 overflow-x-auto pb-2">
-            {!signalsResp?.records.length && (
-              <p className="text-xs text-text-secondary py-4">No trading signals yet. Start the server to begin receiving signals.</p>
-            )}
-            {signalsResp?.records.map((r, i) => <SignalChip key={i} {...r} />)}
+      <Section title="Live Trading Activity">
+        <p className="flex items-center gap-2.5 text-xs mb-5">
+          <StatusDot live={eaConnected} color={eaConnected ? 'success' : 'neutral'} />
+          <span className={eaConnected ? 'text-success font-medium' : 'text-text-disabled font-medium'}>
+            {eaConnected ? `EA Connected · ${livePositions?.symbol}` : 'EA not connected'}
+          </span>
+          {heartbeatLabel && <span className="text-text-secondary">· heartbeat {heartbeatLabel}</span>}
+        </p>
+
+        {!!livePositions?.open_trades.length && (
+          <div className="mb-5">
+            <div className="text-[10px] tracking-widest uppercase text-text-secondary mb-1">Open Positions</div>
+            <div className="flex flex-col divide-y divide-divider/10">
+              {livePositions.open_trades.map((t) => (
+                <PositionRow key={t.ticket} symbol={livePositions.symbol} {...t} />
+              ))}
+            </div>
           </div>
-        </Section>
-      </div>
+        )}
+
+        <div>
+          <div className="text-[10px] tracking-widest uppercase text-text-secondary mb-1">Decision History</div>
+          {!signalsResp?.records.length && (
+            <p className="text-xs text-text-secondary py-4">No trading signals yet. Start the server to begin receiving signals.</p>
+          )}
+          <div className="flex flex-col divide-y divide-divider/10 max-h-105 overflow-y-auto">
+            {signalsResp?.records.map((r, i) => <SignalRow key={i} {...r} />)}
+          </div>
+        </div>
+      </Section>
     </div>
   )
 }

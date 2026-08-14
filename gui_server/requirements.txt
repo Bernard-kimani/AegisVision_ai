@@ -19,6 +19,10 @@ lxml>=4.9.0
 # Cryptography for secure configuration
 cryptography>=41.0.0
 
+# Windows DPAPI (win32crypt) - encrypts the saved API key at rest, bound to
+# the current Windows user account
+pywin32>=306
+
 # Config / secrets
 pydantic-settings>=2.4.0
 

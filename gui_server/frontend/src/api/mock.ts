@@ -1,5 +1,5 @@
 import type { PywebviewApi } from './pywebview'
-import type { FlatConfig, PromptVersion, SignalRecord, StrategySummary, TemplateRecord } from './types'
+import type { FlatConfig, PromptVersion, SignalRecord, StrategySummary, TemplateRecord, TemplateSourceImage } from './types'
 
 // Dev-mode stand-in for window.pywebview.api, used when the app is opened in
 // a plain browser tab (`npm run dev`) instead of the actual pywebview
@@ -26,7 +26,28 @@ let mockConfig: FlatConfig = {
 
 let mockTheme = 'dark'
 let mockServerRunning = false
-let mockSignals: SignalRecord[] = []
+let mockSignals: SignalRecord[] = [
+  {
+    action: 'BUY', symbol: 'XAUUSD', confidence: 78, timestamp: new Date(Date.now() - 6 * 60_000).toISOString(),
+    reasoning: 'Price rejected the 20 EMA with a strong bullish body, matches the pullback continuation template. Higher-timeframe bias is aligned bullish.',
+    entry_price: 2415.2, stop_loss: 2412.0, take_profit: 2421.8,
+  },
+  {
+    action: 'WAIT', symbol: 'XAUUSD', confidence: 42, timestamp: new Date(Date.now() - 19 * 60_000).toISOString(),
+    reasoning: 'Touch and confirmation candle present, but the setup does not resemble the reference template closely enough - body is too small relative to the prior range.',
+    entry_price: null, stop_loss: null, take_profit: null,
+  },
+  {
+    action: 'SELL', symbol: 'XAUUSD', confidence: 81, timestamp: new Date(Date.now() - 52 * 60_000).toISOString(),
+    reasoning: 'Clean rejection from above the EMA with a strong bearish confirmation candle and sufficient downward slope. [VETOED: spread 3.2 exceeds max 2.0]',
+    entry_price: 2409.6, stop_loss: 2412.4, take_profit: 2402.1,
+  },
+]
+let mockHeartbeatSeenAt: number | null = Date.now()
+const mockOpenTrade = {
+  ticket: 900123456, type: 'BUY' as const, open_price: 2415.2, volume: 0.1,
+  stop_loss: 2412.0, take_profit: 2421.8, open_time: new Date(Date.now() - 6 * 60_000).toISOString(),
+}
 const mockLogLines: string[] = [
   '2026-08-14 14:02:45,102 - Engine.Core - INFO - Initializing AegisVision AI Engine. Neural pathways established.',
   '2026-08-14 14:02:46,001 - Market.Feed - INFO - Connecting to primary data stream...',
@@ -48,6 +69,16 @@ let mockPrompt: PromptVersion | null = {
 function emptyTemplates(): Record<string, TemplateRecord | null> {
   return { bullish_ideal: null, bearish_ideal: null, fail_trap: null }
 }
+
+// Real compositing only exists in the Python backend, so this can't produce
+// an actual stitched JPEG -- it just echoes the most recently saved crop
+// back as the "composite" so the UI (thumbnail update, enlarge, etc.) has
+// something real to react to instead of a permanent null image. To see the
+// real stitching pipeline, run the app via pywebview (AEGISVISION_DEV=1
+// venv\Scripts\python gui_server\main.py) pointed at this Vite dev server,
+// not a plain browser tab -- a browser tab has no Python backend to call.
+const mockTemplates: Record<string, TemplateRecord | null> = emptyTemplates()
+const mockSources: Record<string, TemplateSourceImage[]> = { bullish_ideal: [], bearish_ideal: [], fail_trap: [] }
 
 export const mockApi: PywebviewApi = {
   async get_config() { await delay(); return { ...mockConfig } },
@@ -84,21 +115,85 @@ export const mockApi: PywebviewApi = {
     await delay(50)
     return { records: mockSignals.slice(0, 20), since: since + mockSignals.length }
   },
+  async get_trade_telemetry() {
+    await delay(50)
+    const approved = mockSignals.filter((s) => s.action === 'BUY' || s.action === 'SELL').length
+    return {
+      total_evaluated: mockSignals.length,
+      approved,
+      rejected: mockSignals.length - approved,
+      guardrail_vetoed: 0,
+      approved_today: approved,
+      last_decision_time: mockSignals[0]?.timestamp ?? null,
+    }
+  },
+  async get_live_positions() {
+    await delay(50)
+    if (!mockServerRunning || mockHeartbeatSeenAt === null) {
+      return { last_seen: null, seconds_since: null, symbol: '', open_trades: [] }
+    }
+    // Simulate a heartbeat landing every ~10s, same cadence as the real EA.
+    if (Date.now() - mockHeartbeatSeenAt > 10_000) mockHeartbeatSeenAt = Date.now()
+    // Small fake price wobble so the P&L visibly moves on each ~2s poll,
+    // standing in for the real EA's live tick data.
+    const wobble = Math.sin(Date.now() / 4000) * 1.8
+    const currentPrice = mockOpenTrade.open_price + wobble
+    const profit = wobble * mockOpenTrade.volume * 100
+    return {
+      last_seen: new Date(mockHeartbeatSeenAt).toISOString(),
+      seconds_since: (Date.now() - mockHeartbeatSeenAt) / 1000,
+      symbol: 'XAUUSD',
+      open_trades: [{
+        ...mockOpenTrade,
+        current_price: Number(currentPrice.toFixed(2)),
+        profit: Number(profit.toFixed(2)),
+        swap: -0.4,
+      }],
+    }
+  },
 
   async list_strategies() { await delay(); return [mockStrategy] },
   async create_strategy(name, category) { await delay(); return { id: `mock-${Date.now()}`, name, category: category || name } },
   async get_active_strategy() { await delay(); return mockStrategy },
   async set_active_strategy() { await delay(); return true },
-  async get_strategy_templates() { await delay(); return emptyTemplates() },
-  async get_template_sources() { await delay(); return [] },
-  async save_template_source(_sid, slot) {
+  async get_strategy_templates() { await delay(); return { ...mockTemplates } },
+  async get_template_sources(_sid, slot) { await delay(); return mockSources[slot] ?? [] },
+  async save_template_source(_sid, slot, position, imageBase64, cropX, cropY, cropW, cropH, caption) {
     await delay(300)
-    return { slot, filename: `${slot}/composite.png`, caption: '', updated_at: new Date().toISOString(), image: null }
+    const now = new Date().toISOString()
+    const list = (mockSources[slot] ?? []).filter((s) => s.position !== position)
+    list.push({
+      slot, position, filename: `${slot}/sources/${position}.png`,
+      crop_x: cropX, crop_y: cropY, crop_w: cropW, crop_h: cropH,
+      source_width: 0, source_height: 0, updated_at: now, image: imageBase64,
+    })
+    mockSources[slot] = list.sort((a, b) => a.position - b.position)
+    const record: TemplateRecord = {
+      slot, filename: `${slot}/composite.jpg`,
+      caption: caption ?? mockTemplates[slot]?.caption ?? '', updated_at: now, image: imageBase64,
+    }
+    mockTemplates[slot] = record
+    return record
   },
-  async remove_template_source() { await delay(); return null },
+  async remove_template_source(_sid, slot, position) {
+    await delay()
+    mockSources[slot] = (mockSources[slot] ?? []).filter((s) => s.position !== position)
+    const remaining = mockSources[slot]
+    if (!remaining.length) { mockTemplates[slot] = null; return null }
+    const last = remaining[remaining.length - 1]
+    const record: TemplateRecord = {
+      slot, filename: `${slot}/composite.jpg`,
+      caption: mockTemplates[slot]?.caption ?? '', updated_at: new Date().toISOString(), image: last.image,
+    }
+    mockTemplates[slot] = record
+    return record
+  },
   async update_template_caption(_sid, slot, caption) {
     await delay()
-    return { slot, filename: `${slot}/composite.png`, caption, updated_at: new Date().toISOString(), image: null }
+    const existing = mockTemplates[slot]
+    if (!existing) return null
+    mockTemplates[slot] = { ...existing, caption, updated_at: new Date().toISOString() }
+    return mockTemplates[slot]
   },
   async get_cell_aspect_ratio() { await delay(20); return 1 },
   async get_prompt() { await delay(); return mockPrompt },

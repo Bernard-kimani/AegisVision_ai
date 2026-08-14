@@ -3,12 +3,13 @@ TemplateImageStore - storage for the Agent 2 "gold standard" template images
 (ideal bullish setup, ideal bearish setup, ideal fail/trap setup).
 
 Each slot can hold 1-4 curated sub-images (see TemplateSourceImage), stitched
-by template_compositor.py into a single composite.png -- that composite is
+by template_compositor.py into a single composite.jpg -- that composite is
 what get_template()/get_template_base64() expose, so vision_compliance.py
 (and any future consumer) is completely unaware sub-images/compositing exist
 at all; it only ever sees "one image per slot," exactly as before.
 
-Local-file implementation for v1: PNGs + a metadata JSON sidecar. A future
+Local-file implementation for v1: source images as PNGs, composite as JPEG
+(smaller payload for the LLM request) + a metadata JSON sidecar. A future
 Supabase implementation (Storage bucket + rows) would implement the same
 interface with zero change to consumers.
 """
@@ -36,7 +37,7 @@ MAX_SOURCES_PER_SLOT = 4
 @dataclass
 class TemplateRecord:
     slot: str
-    filename: str  # path relative to storage_dir, e.g. "bullish_ideal/composite.png"
+    filename: str  # path relative to storage_dir, e.g. "bullish_ideal/composite.jpg"
     caption: str
     updated_at: str = ""
 
@@ -126,6 +127,17 @@ class LocalFileTemplateImageStore(TemplateImageStore):
         if slot not in TEMPLATE_SLOTS:
             raise ValueError(f"Unknown template slot '{slot}', expected one of {TEMPLATE_SLOTS}")
 
+    def _composite_filename(self, slot: str) -> Optional[str]:
+        """Path (relative to storage_dir) of this slot's composite, if any.
+        Checks the current JPEG output first, then falls back to the legacy
+        PNG a slot composited before the JPEG switch would still have on
+        disk -- avoids silently losing already-curated templates until the
+        user next edits that slot (which recomposites and upgrades it)."""
+        for name in ("composite.jpg", "composite.png"):
+            if os.path.exists(os.path.join(self._slot_dir(slot), name)):
+                return f"{slot}/{name}"
+        return None
+
     # -- writes ------------------------------------------------------------
 
     def save_template(self, slot: str, source_image_path: str, caption: str) -> TemplateRecord:
@@ -170,7 +182,7 @@ class LocalFileTemplateImageStore(TemplateImageStore):
 
         self._recomposite(slot, meta)
         self._write_meta(meta)
-        return TemplateRecord(slot=slot, filename=f"{slot}/composite.png", caption=slot_meta["caption"], updated_at=now)
+        return TemplateRecord(slot=slot, filename=self._composite_filename(slot), caption=slot_meta["caption"], updated_at=now)
 
     def remove_template_source(self, slot: str, position: int) -> Optional[TemplateRecord]:
         self._validate_slot(slot)
@@ -186,9 +198,10 @@ class LocalFileTemplateImageStore(TemplateImageStore):
 
         if not remaining:
             del meta[slot]
-            composite_path = os.path.join(self._slot_dir(slot), "composite.png")
-            if os.path.exists(composite_path):
-                os.remove(composite_path)
+            for name in ("composite.jpg", "composite.png"):
+                composite_path = os.path.join(self._slot_dir(slot), name)
+                if os.path.exists(composite_path):
+                    os.remove(composite_path)
             self._write_meta(meta)
             return None
 
@@ -197,7 +210,7 @@ class LocalFileTemplateImageStore(TemplateImageStore):
         meta[slot] = slot_meta
         self._recomposite(slot, meta)
         self._write_meta(meta)
-        return TemplateRecord(slot=slot, filename=f"{slot}/composite.png", caption=slot_meta["caption"], updated_at=slot_meta["updated_at"])
+        return TemplateRecord(slot=slot, filename=self._composite_filename(slot), caption=slot_meta["caption"], updated_at=slot_meta["updated_at"])
 
     def _recomposite(self, slot: str, meta: Dict[str, dict]) -> None:
         """Rebuild {slot}/composite.png from every current sub-image + its
@@ -219,8 +232,11 @@ class LocalFileTemplateImageStore(TemplateImageStore):
                 cropped.append((img.crop(box).copy(), source["position"]))
 
         composite = template_compositor.composite_slot_images(cropped)
-        composite_path = os.path.join(self._slot_dir(slot), "composite.png")
-        composite.save(composite_path, "PNG")
+        composite_path = os.path.join(self._slot_dir(slot), "composite.jpg")
+        composite.save(composite_path, "JPEG", quality=90)
+        legacy_png = os.path.join(self._slot_dir(slot), "composite.png")
+        if os.path.exists(legacy_png):
+            os.remove(legacy_png)  # superseded by the JPEG written above
         slot_meta["updated_at"] = datetime.now().isoformat()
 
     # -- reads -------------------------------------------------------------
@@ -229,9 +245,12 @@ class LocalFileTemplateImageStore(TemplateImageStore):
         meta = self._load_meta()
         if slot not in meta:
             return None
+        filename = self._composite_filename(slot)
+        if filename is None:
+            return None
         slot_meta = meta[slot]
         return TemplateRecord(
-            slot=slot, filename=f"{slot}/composite.png",
+            slot=slot, filename=filename,
             caption=slot_meta.get("caption", ""), updated_at=slot_meta.get("updated_at", ""),
         )
 

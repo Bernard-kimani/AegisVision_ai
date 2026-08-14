@@ -3,6 +3,7 @@ import type {
   FlatConfig,
   HealthInfo,
   JobOutput,
+  LivePositions,
   LogStats,
   LogTailResponse,
   PromptVersion,
@@ -13,6 +14,7 @@ import type {
   TemplateRecord,
   TemplateSourceImage,
   TestResult,
+  TradeTelemetry,
 } from './types'
 
 // Method signatures mirror gui_server/webview_api.py::WebViewApi 1:1.
@@ -35,6 +37,8 @@ export interface PywebviewApi {
   health_check(): Promise<HealthInfo | null>
 
   get_recent_signals(since?: number): Promise<SignalsResponse>
+  get_trade_telemetry(): Promise<TradeTelemetry>
+  get_live_positions(): Promise<LivePositions>
 
   list_strategies(): Promise<StrategySummary[]>
   create_strategy(name: string, category?: string): Promise<StrategySummary | { error: string }>

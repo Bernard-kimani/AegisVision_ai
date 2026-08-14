@@ -59,6 +59,7 @@ from audit.audit_log import JsonlAuditLogger
 from agents.vision_compliance import DEFAULT_STRATEGY_NAME as PROMPT_KEY
 
 AUDIT_LOG_PATH = os.path.join(get_app_root(), "storage_data", "audit_log.jsonl")
+HEARTBEAT_STATE_PATH = os.path.join(get_app_root(), "storage_data", "heartbeat_state.json")
 
 MAX_SIGNAL_RECORDS = 50
 
@@ -66,9 +67,10 @@ MAX_SIGNAL_RECORDS = 50
 def _to_data_uri(path: str) -> Optional[str]:
     if not path or not os.path.exists(path):
         return None
+    mime_type = "image/jpeg" if path.lower().endswith((".jpg", ".jpeg")) else "image/png"
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _decode_data_uri_to_temp(image_base64: str) -> str:
@@ -253,6 +255,28 @@ class WebViewApi:
     # Signals (audit log tail)
     # ------------------------------------------------------------------
 
+    def get_trade_telemetry(self) -> Dict[str, Any]:
+        """Aggregate counts over the *entire* audit log (not just the
+        capped recent-signals tail) -- every setup Agent 2/3 has ever
+        evaluated, split by outcome. This is the EA's real track record,
+        not a synthetic stat."""
+        records = self.audit_store.read_all()
+        total = len(records)
+        approved = sum(1 for r in records if r.final_action in ("BUY", "SELL"))
+        vetoed = sum(1 for r in records if r.guardrail_vetoed)
+        today = datetime.now().date().isoformat()
+        approved_today = sum(
+            1 for r in records if r.final_action in ("BUY", "SELL") and r.timestamp.startswith(today)
+        )
+        return {
+            "total_evaluated": total,
+            "approved": approved,
+            "rejected": total - approved,
+            "guardrail_vetoed": vetoed,
+            "approved_today": approved_today,
+            "last_decision_time": records[-1].timestamp if records else None,
+        }
+
     def get_recent_signals(self, since: int = 0) -> Dict[str, Any]:
         records = self.audit_store.read_all()
         new_records = records[since:]
@@ -267,10 +291,40 @@ class WebViewApi:
                 "confidence": record.llm_confidence,
                 "reasoning": reasoning,
                 "timestamp": record.timestamp,
+                "entry_price": record.entry_price,
+                "stop_loss": record.final_stop_loss,
+                "take_profit": record.final_take_profit,
             })
         # newest first, capped - mirrors the old chip strip's MAX_SIGNAL_CHIPS behavior
         out = list(reversed(out))[:MAX_SIGNAL_RECORDS]
         return {"records": out, "since": len(records)}
+
+    def get_live_positions(self) -> Dict[str, Any]:
+        """Latest EA heartbeat snapshot: liveness + currently-open positions
+        with real-time P&L, as sent to /heartbeat every few seconds -
+        independent of (and much more frequent than) actual trade signals."""
+        if not os.path.exists(HEARTBEAT_STATE_PATH):
+            return {"last_seen": None, "seconds_since": None, "symbol": "", "open_trades": []}
+        try:
+            with open(HEARTBEAT_STATE_PATH, 'r', encoding='utf-8') as f:
+                snapshot = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {"last_seen": None, "seconds_since": None, "symbol": "", "open_trades": []}
+
+        last_seen = snapshot.get("last_seen")
+        seconds_since = None
+        if last_seen:
+            try:
+                seconds_since = (datetime.now() - datetime.fromisoformat(last_seen)).total_seconds()
+            except ValueError:
+                pass
+
+        return {
+            "last_seen": last_seen,
+            "seconds_since": seconds_since,
+            "symbol": snapshot.get("symbol", ""),
+            "open_trades": snapshot.get("open_trades", []),
+        }
 
     # ------------------------------------------------------------------
     # Strategies

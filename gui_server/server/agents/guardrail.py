@@ -193,6 +193,7 @@ class RiskGuardrail:
                 final_action=result.action,
                 final_stop_loss=result.stop_loss,
                 final_take_profit=result.take_profit,
+                entry_price=ctx.current_price,
             )
         )
 

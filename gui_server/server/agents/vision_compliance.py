@@ -115,8 +115,9 @@ class VisionComplianceFilter:
             b64 = self.template_store.get_template_base64(slot) if record else None
             if not record or not b64:
                 continue
+            mime_type = "image/jpeg" if record.filename.lower().endswith((".jpg", ".jpeg")) else "image/png"
             parts.append(ContentPart.text_part(f"{label}: {record.caption}"))
-            parts.append(ContentPart.image_part(b64))
+            parts.append(ContentPart.image_part(b64, mime_type=mime_type))
             templates_attached += 1
 
         if templates_attached == 0:

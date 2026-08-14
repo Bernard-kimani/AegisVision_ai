@@ -28,6 +28,7 @@ class AuditRecord:
     final_action: str                      # BUY | SELL | WAIT
     final_stop_loss: Optional[float] = None
     final_take_profit: Optional[float] = None
+    entry_price: Optional[float] = None    # market price at decision time
 
     @staticmethod
     def now(**kwargs) -> "AuditRecord":

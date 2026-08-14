@@ -88,8 +88,7 @@ def generate_candle_chart(
         # Style: 'charles' is a standard red/green candle style
         # Custom style: Hide grid to reduce noise, but keep axes for Price Levels
         mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
-        # Use gridstyle='' to hide grid lines effectively
-        s  = mpf.make_mpf_style(marketcolors=mc, gridstyle='')
+        s  = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', gridcolor='#888888')
 
         plot_kwargs = dict(
             type='candle',

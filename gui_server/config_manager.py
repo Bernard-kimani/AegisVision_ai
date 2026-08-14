@@ -3,33 +3,52 @@ Configuration Manager for AegisVision AI Trading Server
 Handles configuration saving, loading, and encryption of sensitive data
 """
 
+import base64
 import json
 import os
 import logging
-from typing import Dict, Any, Optional
-import base64
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import getpass
+from typing import Dict, Any
+
+import win32crypt
 
 logger = logging.getLogger(__name__)
 
+# DPAPI's optional "entropy" argument -- an extra pepper mixed into the
+# encryption, not a secret by itself, but means a blob encrypted with this
+# entropy can't be decrypted by some other unrelated CryptProtectData call
+# that happens to run under the same Windows account.
+_DPAPI_ENTROPY = b"AegisVision_AI_config"
+
+
+def _dpapi_encrypt(plaintext: str) -> str:
+    """Encrypts a secret with Windows DPAPI, bound to the current Windows
+    user account - only decryptable on this machine, by this user, which is
+    exactly the guarantee a locally-stored API key needs. No password/key
+    management on our side: the OS derives and protects the actual key.
+    Returns a base64 string safe to embed in the JSON config file."""
+    blob = win32crypt.CryptProtectData(plaintext.encode("utf-8"), "AegisVision AI secret", _DPAPI_ENTROPY, None, None, 0)
+    return base64.b64encode(blob).decode("ascii")
+
+
+def _dpapi_decrypt(encoded_blob: str) -> str:
+    blob = base64.b64decode(encoded_blob)
+    _, plaintext = win32crypt.CryptUnprotectData(blob, _DPAPI_ENTROPY, None, None, 0)
+    return plaintext.decode("utf-8")
+
+
 class ConfigManager:
     """Manages configuration for the trading server"""
-    
+
     def __init__(self):
         self.config_dir = self._get_config_directory()
         self.config_file = os.path.join(self.config_dir, "trading_config.json")
-        self.encrypted_file = os.path.join(self.config_dir, "secure_config.dat")
-        
+
         # Ensure config directory exists
         os.makedirs(self.config_dir, exist_ok=True)
-        
+
         # Current configuration cache
         self._current_config = {}
-        self._encryption_key = None
-        
+
         # Load existing configuration
         self.load_config()
     
@@ -69,80 +88,69 @@ class ConfigManager:
             }
         }
 
-    def _generate_encryption_key(self, password: str = None) -> bytes:
-        """Generate encryption key from password"""
-        if password is None:
-            # Use a default password (not secure, but better than plain text)
-            password = "AegisVision_AI_Default_Key_2024"
-        
-        password_bytes = password.encode()
-        salt = b'orb_ai_salt_2024'  # In production, use random salt
-        
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(password_bytes))
-        return key
-    
-    def _get_encryption_key(self) -> bytes:
-        """Get or generate encryption key"""
-        if self._encryption_key is None:
-            self._encryption_key = self._generate_encryption_key()
-        return self._encryption_key
-    
     def save_config(self, config_data: Dict[str, Any]) -> bool:
-        """Save configuration with encrypted sensitive data"""
+        """Save configuration. The API key never touches disk in plaintext -
+        it's encrypted with Windows DPAPI first (see _dpapi_encrypt)."""
         try:
-            # Structure the configuration
             structured_config = self._structure_config(config_data)
-            
-            # TEMPORARY: Save API key directly to JSON file (no encryption)
-            # This bypasses the encryption issue for testing
-            logger.info("TEMP: Saving API key directly to config file (no encryption)")
-            
-            # Save configuration directly
+            api_key = structured_config["llm"].pop("api_key", "")
+
+            # _structure_config only knows about server/llm/trading -- carry
+            # forward any other top-level sections (currently just `ui`) so
+            # saving from the Controls form doesn't silently wipe them.
+            structured_config["ui"] = (self._current_config or {}).get("ui", {"theme": "dark"})
+
+            on_disk = json.loads(json.dumps(structured_config))  # deep copy
+            on_disk["llm"]["api_key_encrypted"] = _dpapi_encrypt(api_key) if api_key else ""
+
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(structured_config, f, indent=2, ensure_ascii=False)
-            
-            # Update current config cache
+                json.dump(on_disk, f, indent=2, ensure_ascii=False)
+
+            # In-memory cache keeps the plaintext key so the rest of the app
+            # (LLM calls, the GUI form) isn't calling DPAPI on every read.
+            structured_config["llm"]["api_key"] = api_key
             self._current_config = structured_config
-            
+
             logger.info(f"Configuration saved to {self.config_file}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to save configuration: {e}")
             return False
-    
+
     def load_config(self) -> Dict[str, Any]:
-        """Load configuration with decrypted sensitive data"""
+        """Load configuration, decrypting the API key if it's stored
+        DPAPI-encrypted. Falls back to a legacy plaintext `api_key` field
+        for configs saved before encryption was added - that key still
+        works immediately, and gets encrypted the next time Save runs."""
         try:
-            # Start with defaults
             config = self._get_default_config()
-            
-            # Load from JSON file if exists
+
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     saved_config = json.load(f)
-                
-                # Merge with defaults
                 config = self._merge_configs(config, saved_config)
-            
-            # TEMPORARY: Skip encryption and load API key directly from saved config
-            # This bypasses the encryption issue for testing
-            logger.info("TEMP: Using API key directly from config file (no encryption)")
-            
-            # Update current config cache
+
+            llm = config.setdefault("llm", {})
+            encrypted = llm.pop("api_key_encrypted", None)
+            if encrypted:
+                try:
+                    llm["api_key"] = _dpapi_decrypt(encrypted)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to decrypt stored API key - it was likely saved under a "
+                        f"different Windows account or on a different machine: {e}"
+                    )
+                    llm["api_key"] = ""
+            elif llm.get("api_key"):
+                logger.info("Loaded a plaintext API key saved before encryption support was added - "
+                            "it will be encrypted automatically the next time configuration is saved.")
+
             self._current_config = config
-            
             return config
-            
+
         except Exception as e:
             logger.error(f"Failed to load configuration: {e}")
-            # Return defaults on error
             self._current_config = self._get_default_config()
             return self._current_config
     
@@ -195,54 +203,6 @@ class ConfigManager:
                 result[key] = value
         
         return result
-    
-    def _save_encrypted_data(self, data: Dict[str, Any]):
-        """Save encrypted sensitive data"""
-        try:
-            key = self._get_encryption_key()
-            fernet = Fernet(key)
-            
-            # Convert to JSON and encrypt
-            json_data = json.dumps(data)
-            encrypted_data = fernet.encrypt(json_data.encode())
-            
-            # Save to file
-            with open(self.encrypted_file, 'wb') as f:
-                f.write(encrypted_data)
-                
-        except Exception as e:
-            logger.error(f"Failed to save encrypted data: {e}")
-    
-    def _load_encrypted_data(self) -> Optional[Dict[str, Any]]:
-        """Load and decrypt sensitive data"""
-        try:
-            if not os.path.exists(self.encrypted_file):
-                logger.info("No encrypted file found")
-                return None
-            
-            key = self._get_encryption_key()
-            fernet = Fernet(key)
-            
-            # Load and decrypt
-            with open(self.encrypted_file, 'rb') as f:
-                encrypted_data = f.read()
-            
-            logger.info(f"Loaded {len(encrypted_data)} bytes of encrypted data")
-            
-            decrypted_data = fernet.decrypt(encrypted_data)
-            result = json.loads(decrypted_data.decode())
-            
-            # Debug: Check what we decrypted (safely)
-            if "api_key" in result:
-                api_key = result["api_key"]
-                logger.info(f"Decrypted API key length: {len(api_key)}")
-                logger.info(f"Decrypted API key preview: {api_key[:10]}...{api_key[-5:] if len(api_key) > 15 else '***'}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to load encrypted data: {e}")
-            return None
     
     def get_current_config(self) -> Dict[str, Any]:
         """Get current configuration"""

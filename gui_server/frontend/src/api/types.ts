@@ -35,6 +35,15 @@ export interface ServerStats {
   llm_model: string
 }
 
+export interface TradeTelemetry {
+  total_evaluated: number
+  approved: number
+  rejected: number
+  guardrail_vetoed: number
+  approved_today: number
+  last_decision_time: string | null
+}
+
 export interface HealthInfo {
   status: string
   timestamp?: string
@@ -51,11 +60,34 @@ export interface SignalRecord {
   confidence: number
   reasoning: string
   timestamp: string
+  entry_price: number | null
+  stop_loss: number | null
+  take_profit: number | null
 }
 
 export interface SignalsResponse {
   records: SignalRecord[]
   since: number
+}
+
+export interface LiveTrade {
+  ticket: number
+  type: 'BUY' | 'SELL'
+  open_price: number
+  current_price: number
+  volume: number
+  stop_loss: number
+  take_profit: number
+  open_time: string
+  profit: number
+  swap: number
+}
+
+export interface LivePositions {
+  last_seen: string | null
+  seconds_since: number | null
+  symbol: string
+  open_trades: LiveTrade[]
 }
 
 export interface StrategySummary {

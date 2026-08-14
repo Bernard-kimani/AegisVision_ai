@@ -30,6 +30,9 @@ class GeminiProvider(LLMProvider):
         self.api_key = api_key
         self.model = model
         self.disable_thinking = disable_thinking
+        # Persistent session so consecutive /analyze calls reuse the same
+        # TCP+TLS connection instead of re-handshaking every time.
+        self._session = requests.Session()
 
     def analyze(self, parts: List[ContentPart], max_tokens: int = 1000, temperature: float = 0.3) -> str:
         model_name = GEMINI_MODEL_ALIASES.get(self.model, self.model)
@@ -58,7 +61,7 @@ class GeminiProvider(LLMProvider):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
 
         try:
-            response = requests.post(url, json=data, timeout=45)
+            response = self._session.post(url, json=data, timeout=45)
         except requests.exceptions.RequestException as e:
             logger.error(f"Gemini request failed: {e}")
             raise

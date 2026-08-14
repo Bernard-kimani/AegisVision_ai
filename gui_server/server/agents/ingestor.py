@@ -15,6 +15,7 @@ template, it doesn't invent a trade plan.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -102,20 +103,26 @@ class Ingestor:
     ) -> Optional[IngestorPayload]:
         window_key = self.window_key_for(symbol)
 
+        t0 = time.perf_counter()
         summary = self.preprocessor.generate_market_summary(window_key)
         if not summary:
             logger.warning(f"Could not generate market summary for {window_key}")
             return None
 
         market_summary_text = self.preprocessor.format_for_llm(summary)
+        preprocess_ms = (time.perf_counter() - t0) * 1000
 
+        t1 = time.perf_counter()
         chart_b64 = None
         try:
             window_data = self.window_manager.get_window_data(window_key)
             attr = TIMEFRAME_TO_WINDOW_ATTR.get(chart_timeframe, "candles_5min")
             candles = getattr(window_data, attr, None) if window_data else None
             if candles:
-                recent = candles[-180:] if len(candles) > 180 else candles
+                # M1 charts show the full 6h sliding window (360 candles);
+                # other timeframes keep the previous 180-candle cap.
+                chart_candle_cap = 360 if chart_timeframe == "M1" else 180
+                recent = candles[-chart_candle_cap:] if len(candles) > chart_candle_cap else candles
                 interval = CHART_TIMEFRAME_INTERVAL_MINUTES.get(chart_timeframe, 5)
                 mav = STRATEGY_EMA_PERIOD if chart_timeframe == "M1" else None
                 chart_b64 = generate_candle_chart(
@@ -123,6 +130,9 @@ class Ingestor:
                 )
         except Exception as e:
             logger.error(f"Failed to generate chart image for {window_key}: {e}")
+        chart_ms = (time.perf_counter() - t1) * 1000
+
+        logger.info(f"timing symbol={symbol} preprocess_ms={preprocess_ms:.0f} chart_ms={chart_ms:.0f}")
 
         return IngestorPayload(
             symbol=symbol,

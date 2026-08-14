@@ -1,4 +1,6 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import { useEffect, useState } from 'react'
+import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import { Download } from 'lucide-react'
 
 // Shared layout/visual primitives. Structural philosophy ported from
 // gui_server/gui/theme/layout.py's "grounded" approach: content sits
@@ -9,11 +11,11 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAt
 // uppercase labels — the "everything is labeled, nothing is decorated"
 // vernacular of a trading terminal, not a stylistic flourish.
 
-export function Section({ title, action, children, className = '' }: { title: string; action?: ReactNode; children: ReactNode; className?: string }) {
+export function Section({ title, action, children, className = '' }: { title: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <section className={`mb-7 ${className}`}>
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-[11px] font-semibold tracking-[0.14em] uppercase text-text-secondary">{title}</h2>
+        <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.14em] uppercase text-text-secondary">{title}</h2>
         {action}
       </div>
       <div className="h-px bg-divider/15 mb-3.5" />
@@ -28,9 +30,12 @@ export function Divider({ vertical = false, className = '' }: { vertical?: boole
     : <div className={`h-px bg-divider/15 ${className}`} />
 }
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+/** `square` opts out of the card's default 10px radius -- for popups/modals,
+ * which read as precise, dialog-like overlays rather than the persistent
+ * "financial terminal" surfaces the rounded corner is meant for elsewhere. */
+export function Card({ children, className = '', square = false, ...props }: HTMLAttributes<HTMLDivElement> & { children: ReactNode; className?: string; square?: boolean }) {
   return (
-    <div className={`bg-surface border border-border rounded-card ${className}`}>
+    <div {...props} className={`bg-surface border border-border ${square ? '' : 'rounded-card'} ${className}`}>
       {children}
     </div>
   )
@@ -88,6 +93,24 @@ export function Select({ label, className = '', children, ...props }: SelectHTML
   )
 }
 
+export function Slider({ label, value, display, onChange, min, max, step }: {
+  label: string; value: number; display: string; onChange: (v: number) => void; min: number; max: number; step: number
+}) {
+  return (
+    <label className="flex flex-col gap-1.5 text-sm">
+      <span className="flex items-baseline justify-between text-[11px] tracking-[0.08em] uppercase text-text-secondary">
+        <span>{label}</span>
+        <span className="font-mono tabular-nums normal-case tracking-normal text-text-primary">{display}</span>
+      </span>
+      <input
+        type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1 w-full cursor-pointer appearance-none rounded-full bg-surface-alt accent-(--accent)"
+      />
+    </label>
+  )
+}
+
 export function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <Card className="p-3.5">
@@ -103,28 +126,119 @@ const signalStyles: Record<string, { icon: string; color: string }> = {
   WAIT: { icon: '■', color: 'text-signal-wait' },
 }
 
-export function SignalChip({ action, symbol, confidence, timestamp, reasoning }: {
+/** One row in the decision-history list: what Agent 2/3 actually decided,
+ * with the entry/SL/TP it decided on and the LLM's own justification —
+ * a full record, not a squeezed summary. */
+export function SignalRow({ action, symbol, confidence, timestamp, reasoning, entry_price, stop_loss, take_profit }: {
   action: string; symbol: string; confidence: number; timestamp: string; reasoning: string
+  entry_price: number | null; stop_loss: number | null; take_profit: number | null
 }) {
   const style = signalStyles[action] ?? signalStyles.WAIT
+  const vetoed = reasoning.includes('[VETOED')
   return (
-    <Card className="p-3 w-48 h-24 shrink-0 flex flex-col justify-between overflow-hidden">
-      <div className={`text-xs font-semibold tracking-wide ${style.color}`}>{style.icon} {action} <span className="font-mono">{symbol}</span></div>
-      <div className="text-[11px] font-mono tabular-nums text-text-secondary">{timestamp} · {confidence.toFixed(0)}%</div>
-      <div className="text-[11px] text-text-primary line-clamp-2 leading-snug">{reasoning}</div>
-    </Card>
+    <div className="py-3 first:pt-0 last:pb-0">
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <span className={`text-xs font-semibold tracking-wide ${style.color}`}>
+          {style.icon} {action} <span className="font-mono text-text-primary">{symbol}</span>
+        </span>
+        <span className="text-[11px] font-mono tabular-nums text-text-secondary shrink-0">
+          {new Date(timestamp).toLocaleTimeString()} · {confidence.toFixed(0)}%
+        </span>
+      </div>
+      {entry_price != null && (
+        <div className="flex gap-4 text-[11px] font-mono tabular-nums text-text-secondary mb-1">
+          <span>Entry <span className="text-text-primary">{entry_price.toFixed(2)}</span></span>
+          {stop_loss != null && <span>SL <span className="text-error">{stop_loss.toFixed(2)}</span></span>}
+          {take_profit != null && <span>TP <span className="text-success">{take_profit.toFixed(2)}</span></span>}
+        </div>
+      )}
+      <p className={`text-[11px] leading-snug line-clamp-2 ${vetoed ? 'text-warning' : 'text-text-secondary'}`}>{reasoning}</p>
+    </div>
+  )
+}
+
+/** One row in the live open-positions list, sourced from the EA heartbeat —
+ * real-time floating P&L, not a decision record. */
+export function PositionRow({ type, symbol, open_price, current_price, volume, stop_loss, take_profit, profit }: {
+  type: string; symbol: string; open_price: number; current_price: number; volume: number
+  stop_loss: number; take_profit: number; profit: number
+}) {
+  const style = signalStyles[type] ?? signalStyles.WAIT
+  const profitColor = profit > 0 ? 'text-success' : profit < 0 ? 'text-error' : 'text-text-secondary'
+  return (
+    <div className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <span className={`text-xs font-semibold tracking-wide ${style.color}`}>
+          {style.icon} {type} <span className="font-mono text-text-primary">{symbol}</span>{' '}
+          <span className="font-mono text-text-secondary font-normal">{volume.toFixed(2)} lots</span>
+        </span>
+        <span className="text-[11px] font-mono tabular-nums text-text-secondary truncate">
+          Entry {open_price.toFixed(2)} &rarr; {current_price.toFixed(2)} · SL {stop_loss.toFixed(2)} · TP {take_profit.toFixed(2)}
+        </span>
+      </div>
+      <span className={`text-sm font-mono tabular-nums font-semibold shrink-0 ${profitColor}`}>
+        {profit >= 0 ? '+' : ''}{profit.toFixed(2)}
+      </span>
+    </div>
   )
 }
 
 /** RUNNING/STOPPED-style status dot. Motion (a soft pulse ring) is reserved
  * for the one truly live signal in the app — everything else stays still. */
-export function StatusDot({ live, color }: { live: boolean; color: 'success' | 'error' }) {
-  const hex = color === 'success' ? 'var(--success)' : 'var(--error)'
+export function StatusDot({ live, color }: { live: boolean; color: 'success' | 'error' | 'neutral' }) {
+  const hex = color === 'success' ? 'var(--success)' : color === 'error' ? 'var(--error)' : 'var(--text-disabled)'
   return (
     <span
       className={`inline-block h-2 w-2 rounded-full ${live ? 'animate-pulse-ring' : ''}`}
       style={{ backgroundColor: hex, ['--pulse-color' as string]: hex }}
     />
+  )
+}
+
+/** Full-size view of a thumbnail-sized preview image, dismissed via backdrop
+ * click, X, or Escape. `downloadName` adds a download button + a live
+ * width×height readout (read off the decoded image itself) -- the fastest
+ * way to confirm a composite/export actually came out at the size expected,
+ * without leaving the app to check a saved file's properties. */
+export function Lightbox({ src, alt, onClose, downloadName }: { src: string; alt: string; onClose: () => void; downloadName?: string }) {
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8" onClick={onClose}>
+      <img
+        src={src} alt={alt} className="max-h-full max-w-full object-contain"
+        onClick={(e) => e.stopPropagation()}
+        onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+      />
+      <div className="absolute top-5 right-5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        {dims && (
+          <span className="flex h-9 items-center bg-black/50 px-3 text-xs font-mono tabular-nums text-white">
+            {dims.w} × {dims.h}px
+          </span>
+        )}
+        {downloadName && (
+          <a
+            href={src} download={downloadName} aria-label="Download image"
+            className="flex h-9 w-9 items-center justify-center bg-black/50 text-white transition hover:bg-black/70"
+          >
+            <Download size={14} />
+          </a>
+        )}
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          ×
+        </button>
+      </div>
+    </div>
   )
 }
 
