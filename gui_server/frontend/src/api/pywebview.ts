@@ -3,6 +3,7 @@ import type {
   FlatConfig,
   HealthInfo,
   JobOutput,
+  LatestChart,
   LivePositions,
   LogStats,
   LogTailResponse,
@@ -39,6 +40,8 @@ export interface PywebviewApi {
   get_recent_signals(since?: number): Promise<SignalsResponse>
   get_trade_telemetry(): Promise<TradeTelemetry>
   get_live_positions(): Promise<LivePositions>
+  get_latest_chart(): Promise<LatestChart | null>
+  save_data_uri(dataUri: string, suggestedName: string): Promise<string | null>
 
   list_strategies(): Promise<StrategySummary[]>
   create_strategy(name: string, category?: string): Promise<StrategySummary | { error: string }>

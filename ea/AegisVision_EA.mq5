@@ -63,7 +63,7 @@ input double    RiskPercent = 1.0;                 // % of balance/equity risked
 input int       MaxSimultaneousTrades = 2;         // Maximum number of simultaneous trades (both modes)
 
 input group "=== Strategy Trigger: MA & Slope ==="
-input ENUM_MA_METHOD    MA_Method = MODE_EMA;         // Moving average type (SMA/EMA/SMMA/LWMA) - the trend/slope line
+input ENUM_MA_METHOD    MA_Method = MODE_SMA;         // Moving average type (SMA/EMA/SMMA/LWMA) - the trend/slope line
 input int               MA_Period = 20;               // MA period (1-minute chart)
 input ENUM_APPLIED_PRICE MA_AppliedPrice = PRICE_CLOSE; // Price series the MA is calculated from
 input int       SlopeLookbackBars = 15;            // Bars back used to measure the MA slope
@@ -180,6 +180,8 @@ int OnInit()
 void OnDeinit(const int reason)
 {
     EventKillTimer();
+    if(!BypassLLM)
+        SendDisconnectSignal();
     if(maHandle != INVALID_HANDLE)
         IndicatorRelease(maHandle);
     Print("LLM Trading EA with Sliding Window v5.0 deinitialized");
@@ -841,6 +843,32 @@ void SendHeartbeat()
             lastHeartbeatErrorPrint = TimeCurrent();
         }
     }
+}
+
+//+------------------------------------------------------------------+
+//| One-shot "I'm going away" ping, sent from OnDeinit() so the GUI  |
+//| shows "EA not connected" and clears any open-position snapshot   |
+//| immediately instead of waiting up to HeartbeatIntervalSeconds*3  |
+//| for the liveness heuristic to notice on its own. Short, fixed    |
+//| timeout (not WebRequestTimeout) so EA removal/recompile never    |
+//| hangs waiting on the network if the server is unreachable.       |
+//+------------------------------------------------------------------+
+void SendDisconnectSignal()
+{
+    string json = "{\"disconnected\":true,\"connection_id\":\"" + connectionId + "\"}";
+
+    char postData[];
+    char result[];
+    string headers = "Content-Type: application/json\r\n";
+
+    int charCount = StringToCharArray(json, postData, 0, WHOLE_ARRAY, CP_UTF8);
+    int dataLen = charCount - 1;
+    if(dataLen <= 0)
+        return;
+    ArrayResize(postData, dataLen);
+
+    WebRequest("POST", HeartbeatURL, headers, 3000, postData, result, headers);
+    // Result intentionally ignored - EA is unwinding either way.
 }
 
 //+------------------------------------------------------------------+

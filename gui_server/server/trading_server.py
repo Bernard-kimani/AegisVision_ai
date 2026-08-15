@@ -8,6 +8,7 @@ itself - see agents/ingestor.py, agents/vision_compliance.py, agents/guardrail.p
     /analyze  ->  Ingestor.ingest_*()  ->  VisionComplianceFilter.evaluate()  ->  RiskGuardrail.evaluate()  ->  EA-compatible JSON
 """
 
+import base64
 import json
 import logging
 import os
@@ -58,6 +59,20 @@ STORAGE_DATA_DIR = os.path.join(get_app_root(), "storage_data")
 # a single mutable file (unlike the append-only audit_log.jsonl) is correct.
 HEARTBEAT_STATE_PATH = os.path.join(STORAGE_DATA_DIR, "heartbeat_state.json")
 _heartbeat_lock = threading.Lock()
+
+# Most recently generated M1 chart - the exact image Agent 2 sees, overwritten
+# on every render (bulk-load test render or a real signal) so it always shows
+# the latest one without a growing gallery to manage.
+LATEST_CHART_PATH = os.path.join(STORAGE_DATA_DIR, "latest_chart.png")
+
+
+def _save_latest_chart(chart_b64: str) -> None:
+    try:
+        with open(LATEST_CHART_PATH, 'wb') as f:
+            f.write(base64.b64decode(chart_b64))
+        logger.info(f"Saved latest chart image to {LATEST_CHART_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to save latest chart image: {e}")
 
 
 def default_config() -> Dict[str, Any]:
@@ -168,6 +183,18 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         # during the long stretches between real /analyze evaluations.
         try:
             data = request.get_json(force=True, silent=True) or {}
+
+            # EA sends this once from OnDeinit() when it's removed/stopped -
+            # clear the snapshot outright rather than waiting for the
+            # 30s-stale heuristic to notice, and drop any open_trades it was
+            # last holding so a real closed trade doesn't linger in the GUI
+            # forever as a phantom position.
+            if data.get("disconnected"):
+                with _heartbeat_lock:
+                    if os.path.exists(HEARTBEAT_STATE_PATH):
+                        os.remove(HEARTBEAT_STATE_PATH)
+                return jsonify({"status": "ok"})
+
             snapshot = {
                 "symbol": data.get("symbol", ""),
                 "open_trades": data.get("open_trades", []),
@@ -329,6 +356,30 @@ def _handle_bulk_load(data: Dict, symbol: str, ingestor: Ingestor) -> Dict[str, 
     candles_1hour = [c for c in (parse_candle_data(d, "H1", symbol) for d in data.get('candles_1hour', [])) if c]
 
     result = ingestor.ingest_bulk(symbol, candles_1min, candles_5min, candles_1hour)
+
+    if result["success"]:
+        # Render a test chart off the freshly-loaded window, as if a signal
+        # had just fired - lets whoever just connected the EA see chart
+        # quality/framing/timing right away via the GUI's Latest Chart
+        # preview, without waiting for a real trigger to occur. No LLM call
+        # here - this is Agent 1's chart render only.
+        #
+        # Off-thread and fire-and-forget on purpose: the EA's bulk-load
+        # WebRequest is waiting on this response, and chart rendering (first
+        # matplotlib call in the process can be slow to warm up) has no
+        # business being on that critical path - the EA doesn't need the
+        # image, only the GUI's Latest Chart preview does, and that already
+        # polls for it separately.
+        def _render_test_chart():
+            try:
+                test_payload = ingestor.build_dynamic_payload(symbol, chart_timeframe="M1")
+                if test_payload and test_payload.chart_image_b64:
+                    _save_latest_chart(test_payload.chart_image_b64)
+            except Exception as e:
+                logger.error(f"Post-bulk-load test chart render failed: {e}")
+
+        threading.Thread(target=_render_test_chart, daemon=True).start()
+
     return {"success": result["success"], "status": result["status"]}
 
 
@@ -365,6 +416,8 @@ def _run_pipeline(
     payload = ingestor.build_dynamic_payload(symbol, open_trades=open_trades, chart_timeframe="M1")
     if payload is None:
         return _wait_response("Could not generate market summary")
+    if payload.chart_image_b64:
+        _save_latest_chart(payload.chart_image_b64)
 
     # Direction and SL/TP/headroom/R:R/higher-tf-bias are all deterministic -
     # computed by Agent 0 (the EA's trigger) and Agent 1 (this call), never by

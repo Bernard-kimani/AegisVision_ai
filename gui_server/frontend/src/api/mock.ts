@@ -48,6 +48,31 @@ const mockOpenTrade = {
   ticket: 900123456, type: 'BUY' as const, open_price: 2415.2, volume: 0.1,
   stop_loss: 2412.0, take_profit: 2421.8, open_time: new Date(Date.now() - 6 * 60_000).toISOString(),
 }
+
+// Stand-in for the real mplfinance PNG (candles + EMA overlay + gridlines) so
+// the settings drawer's Latest Chart preview has something to render in dev
+// mode -- an inline SVG data URI, not a fetched asset.
+const MOCK_CHART_DATA_URI = (() => {
+  const candles = Array.from({ length: 40 }, (_, i) => {
+    const x = 10 + i * 20
+    const up = Math.random() > 0.5
+    const bodyTop = 100 + Math.random() * 80
+    const bodyH = 10 + Math.random() * 40
+    const wickTop = bodyTop - Math.random() * 20
+    const wickBot = bodyTop + bodyH + Math.random() * 20
+    const color = up ? '#2f8f56' : '#c14a3a'
+    return `<line x1="${x + 4}" y1="${wickTop}" x2="${x + 4}" y2="${wickBot}" stroke="${color}" stroke-width="1"/>`
+      + `<rect x="${x}" y="${bodyTop}" width="8" height="${bodyH}" fill="${color}"/>`
+  }).join('')
+  const gridlines = Array.from({ length: 8 }, (_, i) =>
+    `<line x1="0" y1="${(i + 1) * 32}" x2="800" y2="${(i + 1) * 32}" stroke="#333" stroke-width="1" stroke-dasharray="2,3"/>`
+  ).join('')
+  const emaPoints = Array.from({ length: 40 }, (_, i) => `${10 + i * 20 + 4},${150 + Math.sin(i / 4) * 30}`).join(' ')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="320" viewBox="0 0 800 320">`
+    + `<rect width="800" height="320" fill="#0d0d0d"/>${gridlines}${candles}`
+    + `<polyline points="${emaPoints}" fill="none" stroke="#3b82f6" stroke-width="1.5"/></svg>`
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+})()
 const mockLogLines: string[] = [
   '2026-08-14 14:02:45,102 - Engine.Core - INFO - Initializing AegisVision AI Engine. Neural pathways established.',
   '2026-08-14 14:02:46,001 - Market.Feed - INFO - Connecting to primary data stream...',
@@ -150,6 +175,25 @@ export const mockApi: PywebviewApi = {
         swap: -0.4,
       }],
     }
+  },
+  async get_latest_chart() {
+    await delay(80)
+    if (!mockServerRunning) return null
+    return { image: MOCK_CHART_DATA_URI, updated_at: new Date(Date.now() - 42_000).toISOString() }
+  },
+  async save_data_uri(dataUri, suggestedName) {
+    await delay(50)
+    // A plain browser tab (this dev-mode stand-in) can just trigger a real
+    // download directly -- it's only inside pywebview's WebView2 shell that
+    // <a download> is unreliable, which is what the real implementation
+    // works around with a native Save dialog instead.
+    const a = document.createElement('a')
+    a.href = dataUri
+    a.download = suggestedName
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    return suggestedName
   },
 
   async list_strategies() { await delay(); return [mockStrategy] },

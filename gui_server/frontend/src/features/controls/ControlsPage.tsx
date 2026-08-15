@@ -1,9 +1,62 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getApi } from '../../api/client'
-import type { FlatConfig } from '../../api/types'
-import { Button, PositionRow, Section, Select, SignalRow, StatusDot, TextField } from '../../components/primitives'
+import type { FlatConfig, SignalRecord } from '../../api/types'
+import { Button, Card, PositionRow, Section, Select, SignalRow, StatusDot, TextField } from '../../components/primitives'
 import { MODELS_BY_PROVIDER } from './models'
+
+const SIGNAL_STYLE: Record<string, { icon: string; color: string }> = {
+  BUY: { icon: '▲', color: 'text-success' },
+  SELL: { icon: '▼', color: 'text-error' },
+  WAIT: { icon: '■', color: 'text-signal-wait' },
+}
+
+/** Wide, two-column popup for a single decision-history row — the AI's full
+ * reasoning doesn't fit the one-line row, so it only ever appears here.
+ * Horizontal-heavy on purpose: facts (entry/SL/TP/confidence) in a narrow
+ * left rail, reasoning given the rest of the width to breathe as prose. */
+function SignalDetailModal({ record, onClose }: { record: SignalRecord; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const style = SIGNAL_STYLE[record.action] ?? SIGNAL_STYLE.WAIT
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <Card square className="w-full max-w-3xl max-h-[85vh] overflow-y-auto p-5 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-baseline gap-2">
+            <span className={`text-sm font-semibold tracking-wide ${style.color}`}>{style.icon} {record.action}</span>
+            <span className="font-mono text-base text-text-primary">{record.symbol}</span>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="flex h-7 w-7 items-center justify-center text-text-secondary transition hover:text-text-primary">×</button>
+        </div>
+        <div className="flex flex-col md:flex-row gap-6">
+          <div className="md:w-48 shrink-0 flex flex-col gap-3">
+            <div className="text-[11px] font-mono tabular-nums text-text-secondary">
+              {new Date(record.timestamp).toLocaleString()}
+              <br />{record.confidence.toFixed(0)}% confidence
+            </div>
+            {record.entry_price != null && (
+              <div className="flex flex-col gap-1 text-xs font-mono tabular-nums">
+                <span>Entry <span className="text-text-primary">{record.entry_price.toFixed(2)}</span></span>
+                {record.stop_loss != null && <span>SL <span className="text-error">{record.stop_loss.toFixed(2)}</span></span>}
+                {record.take_profit != null && <span>TP <span className="text-success">{record.take_profit.toFixed(2)}</span></span>}
+              </div>
+            )}
+          </div>
+          <div className="flex-1 min-w-0 flex flex-col gap-2">
+            <div className="text-[10px] tracking-widest uppercase text-text-secondary">AI Reasoning</div>
+            <p className="text-sm leading-relaxed text-text-primary whitespace-pre-wrap">{record.reasoning}</p>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
 
 const DEFAULTS: FlatConfig = {
   host: 'localhost', port: '8080', llm_provider: 'gemini', model: 'gemini-2.5-flash',
@@ -17,6 +70,7 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
   const [dirty, setDirty] = useState(false)
   const [connMsg, setConnMsg] = useState<string | null>(null)
   const [apiMsg, setApiMsg] = useState<string | null>(null)
+  const [openSignal, setOpenSignal] = useState<SignalRecord | null>(null)
 
   const { data: config } = useQuery({ queryKey: ['config'], queryFn: async () => (await getApi()).get_config() })
   const { data: status } = useQuery({
@@ -200,15 +254,18 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
         <Button variant="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>Save Changes</Button>
       </div>
 
-      <Section title="Live Trading Activity">
-        <p className="flex items-center gap-2.5 text-xs mb-5">
-          <StatusDot live={eaConnected} color={eaConnected ? 'success' : 'neutral'} />
-          <span className={eaConnected ? 'text-success font-medium' : 'text-text-disabled font-medium'}>
+      <Section
+        title="Live Trading Activity"
+        action={
+          <span className={`flex items-center gap-1.5 px-1 py-1 text-[11px] font-medium ${
+            eaConnected ? 'text-success' : 'text-text-disabled'
+          }`}>
+            <StatusDot live={eaConnected} pulse={false} color={eaConnected ? 'success' : 'neutral'} />
             {eaConnected ? `EA Connected · ${livePositions?.symbol}` : 'EA not connected'}
+            {heartbeatLabel && <span className="opacity-70">· {heartbeatLabel}</span>}
           </span>
-          {heartbeatLabel && <span className="text-text-secondary">· heartbeat {heartbeatLabel}</span>}
-        </p>
-
+        }
+      >
         {!!livePositions?.open_trades.length && (
           <div className="mb-5">
             <div className="text-[10px] tracking-widest uppercase text-text-secondary mb-1">Open Positions</div>
@@ -226,10 +283,12 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
             <p className="text-xs text-text-secondary py-4">No trading signals yet. Start the server to begin receiving signals.</p>
           )}
           <div className="flex flex-col divide-y divide-divider/10 max-h-105 overflow-y-auto">
-            {signalsResp?.records.map((r, i) => <SignalRow key={i} {...r} />)}
+            {signalsResp?.records.map((r, i) => <SignalRow key={i} record={r} onClick={() => setOpenSignal(r)} />)}
           </div>
         </div>
       </Section>
+
+      {openSignal && <SignalDetailModal record={openSignal} onClose={() => setOpenSignal(null)} />}
     </div>
   )
 }

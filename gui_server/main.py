@@ -79,6 +79,18 @@ def main():
     try:
         logger.info("Starting AegisVision AI Trading Server...")
 
+        if sys.platform == "win32":
+            # Without this, Windows treats the process as a generic
+            # "python.exe" host and shows the interpreter's own icon on the
+            # taskbar button instead of the window's icon (set below via
+            # webview.start(icon=...)) - this must run before that window is
+            # created to take effect. Harmless no-op on non-Windows/if it fails.
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AegisVisionAI.TradingServer")
+            except Exception:
+                pass
+
         config_manager = ConfigManager()
         server_manager = ServerManager(config_manager)
         api = WebViewApi(config_manager, server_manager)

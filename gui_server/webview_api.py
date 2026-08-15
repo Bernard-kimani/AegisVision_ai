@@ -60,6 +60,7 @@ from agents.vision_compliance import DEFAULT_STRATEGY_NAME as PROMPT_KEY
 
 AUDIT_LOG_PATH = os.path.join(get_app_root(), "storage_data", "audit_log.jsonl")
 HEARTBEAT_STATE_PATH = os.path.join(get_app_root(), "storage_data", "heartbeat_state.json")
+LATEST_CHART_PATH = os.path.join(get_app_root(), "storage_data", "latest_chart.png")
 
 MAX_SIGNAL_RECORDS = 50
 
@@ -325,6 +326,38 @@ class WebViewApi:
             "symbol": snapshot.get("symbol", ""),
             "open_trades": snapshot.get("open_trades", []),
         }
+
+    def get_latest_chart(self) -> Optional[Dict[str, Any]]:
+        """The most recently generated M1 chart image - either from a real
+        signal or the one-shot test render fired right after the EA's bulk
+        historical load completes. Lets the operator eyeball chart
+        quality/framing (gridlines, SMA overlay, 6h window) without waiting
+        for a live trade setup to occur."""
+        if not os.path.exists(LATEST_CHART_PATH):
+            return None
+        return {
+            "image": _to_data_uri(LATEST_CHART_PATH),
+            "updated_at": datetime.fromtimestamp(os.path.getmtime(LATEST_CHART_PATH)).isoformat(),
+        }
+
+    def save_data_uri(self, data_uri: str, suggested_name: str) -> Optional[str]:
+        """Native OS Save dialog for anything the frontend only holds as a
+        data URI (chart/template image previews) - a plain <a download> link
+        is unreliable inside pywebview's WebView2 shell, unlike this
+        file-dialog path already used by export_config/export_log below."""
+        import webview
+        window = webview.windows[0]
+        result = window.create_file_dialog(
+            webview.FileDialog.SAVE, save_filename=suggested_name,
+            file_types=("PNG files (*.png)", "All files (*.*)"),
+        )
+        path = result[0] if result else None
+        if not path:
+            return None
+        _, _, encoded = data_uri.partition(",")
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(encoded))
+        return path
 
     # ------------------------------------------------------------------
     # Strategies

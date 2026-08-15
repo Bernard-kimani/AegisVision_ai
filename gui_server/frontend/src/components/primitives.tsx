@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { Download } from 'lucide-react'
+import { getApi } from '../api/client'
+import type { SignalRecord } from '../api/types'
 
 // Shared layout/visual primitives. Structural philosophy ported from
 // gui_server/gui/theme/layout.py's "grounded" approach: content sits
@@ -126,34 +128,36 @@ const signalStyles: Record<string, { icon: string; color: string }> = {
   WAIT: { icon: '■', color: 'text-signal-wait' },
 }
 
-/** One row in the decision-history list: what Agent 2/3 actually decided,
- * with the entry/SL/TP it decided on and the LLM's own justification —
- * a full record, not a squeezed summary. */
-export function SignalRow({ action, symbol, confidence, timestamp, reasoning, entry_price, stop_loss, take_profit }: {
-  action: string; symbol: string; confidence: number; timestamp: string; reasoning: string
-  entry_price: number | null; stop_loss: number | null; take_profit: number | null
-}) {
+/** One compact, single-line row in the decision-history list, using the
+ * panel's full width instead of stacking action/entry/reasoning across
+ * three lines. Click opens a detail modal with the full record — the AI's
+ * complete reasoning doesn't fit (and shouldn't be squeezed into) one line. */
+export function SignalRow({ record, onClick }: { record: SignalRecord; onClick: () => void }) {
+  const { action, symbol, confidence, timestamp, reasoning, entry_price, stop_loss, take_profit } = record
   const style = signalStyles[action] ?? signalStyles.WAIT
   const vetoed = reasoning.includes('[VETOED')
   return (
-    <div className="py-3 first:pt-0 last:pb-0">
-      <div className="flex items-center justify-between gap-3 mb-1">
-        <span className={`text-xs font-semibold tracking-wide ${style.color}`}>
-          {style.icon} {action} <span className="font-mono text-text-primary">{symbol}</span>
-        </span>
-        <span className="text-[11px] font-mono tabular-nums text-text-secondary shrink-0">
-          {new Date(timestamp).toLocaleTimeString()} · {confidence.toFixed(0)}%
-        </span>
-      </div>
-      {entry_price != null && (
-        <div className="flex gap-4 text-[11px] font-mono tabular-nums text-text-secondary mb-1">
-          <span>Entry <span className="text-text-primary">{entry_price.toFixed(2)}</span></span>
-          {stop_loss != null && <span>SL <span className="text-error">{stop_loss.toFixed(2)}</span></span>}
-          {take_profit != null && <span>TP <span className="text-success">{take_profit.toFixed(2)}</span></span>}
-        </div>
-      )}
-      <p className={`text-[11px] leading-snug line-clamp-2 ${vetoed ? 'text-warning' : 'text-text-secondary'}`}>{reasoning}</p>
-    </div>
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-4 py-2 first:pt-0 last:pb-0 text-left hover:bg-surface-alt/50 transition-colors focus-visible:outline-none focus-visible:bg-surface-alt/50"
+    >
+      <span className={`text-xs font-semibold tracking-wide shrink-0 whitespace-nowrap ${style.color}`}>
+        {style.icon} {action} <span className="font-mono text-text-primary">{symbol}</span>
+      </span>
+      <span className="flex-1 min-w-0 truncate text-[11px] font-mono tabular-nums text-text-secondary">
+        {entry_price != null ? (
+          <>
+            Entry <span className="text-text-primary">{entry_price.toFixed(2)}</span>
+            {stop_loss != null && <> · SL <span className="text-error">{stop_loss.toFixed(2)}</span></>}
+            {take_profit != null && <> · TP <span className="text-success">{take_profit.toFixed(2)}</span></>}
+          </>
+        ) : reasoning}
+      </span>
+      {vetoed && <span className="shrink-0 text-[10px] font-semibold tracking-widest uppercase text-warning">Vetoed</span>}
+      <span className="shrink-0 text-[11px] font-mono tabular-nums text-text-secondary">
+        {confidence.toFixed(0)}% · {new Date(timestamp).toLocaleTimeString()}
+      </span>
+    </button>
   )
 }
 
@@ -184,12 +188,14 @@ export function PositionRow({ type, symbol, open_price, current_price, volume, s
 }
 
 /** RUNNING/STOPPED-style status dot. Motion (a soft pulse ring) is reserved
- * for the one truly live signal in the app — everything else stays still. */
-export function StatusDot({ live, color }: { live: boolean; color: 'success' | 'error' | 'neutral' }) {
+ * for the one truly live signal in the app — everything else stays still.
+ * `pulse` opts a given usage out of that ring entirely (e.g. a badge that
+ * should read as calmly "on" rather than actively blinking). */
+export function StatusDot({ live, color, pulse = true }: { live: boolean; color: 'success' | 'error' | 'neutral'; pulse?: boolean }) {
   const hex = color === 'success' ? 'var(--success)' : color === 'error' ? 'var(--error)' : 'var(--text-disabled)'
   return (
     <span
-      className={`inline-block h-2 w-2 rounded-full ${live ? 'animate-pulse-ring' : ''}`}
+      className={`inline-block h-2 w-2 rounded-full ${live && pulse ? 'animate-pulse-ring' : ''}`}
       style={{ backgroundColor: hex, ['--pulse-color' as string]: hex }}
     />
   )
@@ -223,12 +229,13 @@ export function Lightbox({ src, alt, onClose, downloadName }: { src: string; alt
           </span>
         )}
         {downloadName && (
-          <a
-            href={src} download={downloadName} aria-label="Download image"
+          <button
+            onClick={() => getApi().then((api) => api.save_data_uri(src, downloadName))}
+            aria-label="Download image"
             className="flex h-9 w-9 items-center justify-center bg-black/50 text-white transition hover:bg-black/70"
           >
             <Download size={14} />
-          </a>
+          </button>
         )}
         <button
           onClick={onClose}

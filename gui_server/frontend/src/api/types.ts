@@ -90,6 +90,11 @@ export interface LivePositions {
   open_trades: LiveTrade[]
 }
 
+export interface LatestChart {
+  image: string
+  updated_at: string
+}
+
 export interface StrategySummary {
   id: string
   name: string

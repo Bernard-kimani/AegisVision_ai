@@ -27,12 +27,13 @@ from utils.chart_generator import generate_candle_chart
 logger = logging.getLogger(__name__)
 
 # Chart is rendered from the M1 tier by default: the strategy's trigger and
-# the 20 EMA line it trades against both live on the 1-minute chart, so that's
+# the 20 SMA line it trades against both live on the 1-minute chart, so that's
 # the "Image C" the vision-compliance agent needs to see. Swappable per-call.
 CHART_TIMEFRAME_INTERVAL_MINUTES = {"M1": 1, "M5": 5, "H1": 60}
 TIMEFRAME_TO_WINDOW_ATTR = {"M1": "candles_1min", "M5": "candles_5min", "H1": "candles_1hour"}
 
-STRATEGY_EMA_PERIOD = 20  # must match the EA's EMA_Period input
+STRATEGY_MA_PERIOD = 20  # must match the EA's MA_Period input (MA_Method = MODE_SMA)
+STRATEGY_RSI_PERIOD = 14  # standard RSI reading, shown as a sub-panel on M1 charts
 SL_LOOKBACK_CANDLES = 3   # must match the EA's SL_LookbackBars input
 # Must match the EA's SL_BufferPoints input x the broker's point size
 # (e.g. 100 points x $0.01 = $1.00 for a 2-digit XAUUSD quote). Update this
@@ -119,14 +120,18 @@ class Ingestor:
             attr = TIMEFRAME_TO_WINDOW_ATTR.get(chart_timeframe, "candles_5min")
             candles = getattr(window_data, attr, None) if window_data else None
             if candles:
-                # M1 charts show the full 6h sliding window (360 candles);
-                # other timeframes keep the previous 180-candle cap.
-                chart_candle_cap = 360 if chart_timeframe == "M1" else 180
+                # M1 charts show the most recent 240 candles - less than the
+                # full 6h/360-candle window so each candle stays visually
+                # readable rather than squeezed thin; other timeframes keep
+                # the previous 180-candle cap.
+                chart_candle_cap = 240 if chart_timeframe == "M1" else 180
                 recent = candles[-chart_candle_cap:] if len(candles) > chart_candle_cap else candles
                 interval = CHART_TIMEFRAME_INTERVAL_MINUTES.get(chart_timeframe, 5)
-                mav = STRATEGY_EMA_PERIOD if chart_timeframe == "M1" else None
+                mav = STRATEGY_MA_PERIOD if chart_timeframe == "M1" else None
+                rsi_period = STRATEGY_RSI_PERIOD if chart_timeframe == "M1" else None
                 chart_b64 = generate_candle_chart(
-                    recent, title=f"{symbol} {chart_timeframe}", interval_minutes=interval, mav=mav
+                    recent, title=f"{symbol} {chart_timeframe}", interval_minutes=interval,
+                    mav=mav, rsi_period=rsi_period,
                 )
         except Exception as e:
             logger.error(f"Failed to generate chart image for {window_key}: {e}")

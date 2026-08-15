@@ -125,7 +125,7 @@ function CaptionModal({ initialValue, busy, onCancel, onSave }: {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={() => !busy && onCancel()}>
       <Card square className="w-160 max-w-full p-3 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-[11px] font-semibold tracking-widest uppercase text-text-secondary">Caption — context for the LLM</h2>
+        <h2 className="text-[11px] font-semibold tracking-widest uppercase text-text-secondary">Caption — context for the AI</h2>
         <textarea
           value={value} onChange={(e) => setValue(e.target.value)} rows={14} autoFocus
           placeholder="Describe what this setup shows and why it matters..."
@@ -292,7 +292,7 @@ function TemplateSlotCard({ strategyId, slot, record, onChanged, onStatusMessage
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
         <span className="text-[11px] tracking-[0.08em] uppercase text-text-secondary">
-          {configuring ? 'Source Images' : 'Caption — context for the LLM'}
+          {configuring ? 'Source Images' : 'Caption — context for the AI'}
         </span>
         {!configuring && (
           <button onClick={() => setCaptionModalOpen(true)} aria-label="Expand caption editor" className="text-text-disabled hover:text-accent transition">
