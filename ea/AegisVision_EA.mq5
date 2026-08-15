@@ -60,7 +60,8 @@ input group "=== Risk & Trade Limits ==="
 input ENUM_RISK_MODE RiskMode = RISK_FIXED_LOT;    // How LotSize/RiskPercent translate into an actual lot size
 input double    LotSize = 0.01;                    // Trade lot size (used when RiskMode = RISK_FIXED_LOT)
 input double    RiskPercent = 1.0;                 // % of balance/equity risked per trade (used when RiskMode != RISK_FIXED_LOT)
-input int       MaxSimultaneousTrades = 2;         // Maximum number of simultaneous trades (both modes)
+input int       MaxSimultaneousTrades = 2;         // Maximum number of simultaneous trades (both modes) - enforced here only; the server is never even asked once this cap is hit
+input int       NewsBlackoutMinutes = 30;          // How close (minutes, before/after) a high-impact news event has to be for the server's Guardrail to veto (server mode only)
 
 input group "=== Strategy Trigger: MA & Slope ==="
 input ENUM_MA_METHOD    MA_Method = MODE_SMA;         // Moving average type (SMA/EMA/SMMA/LWMA) - the trend/slope line
@@ -74,25 +75,36 @@ input group "=== Strategy Trigger: Touch & Confirmation ==="
 input int       MaxConfirmationBars = 2;           // Touch candle itself, or up to this many bars after, may confirm
 input double    MinBodyPercentOfRange = 40.0;      // Confirmation candle's body must be at least this % of its range (rejects dojis)
 
-input group "=== Stop-Loss (standalone mode) ==="
+input group "=== Stop-Loss ==="
 // SL is placed at the swing high/low of the last SL_LookbackBars closed
 // candles (the wick the price would have to reverse back through to
-// invalidate the setup), plus a fixed points buffer beyond it.
+// invalidate the setup), plus a fixed points buffer beyond it. Used for
+// every real order in both modes - standalone trades directly off it, and
+// server mode sends it as the EA's own risk figure (see BuildSignalPayload)
+// that the server's Guardrail cross-checks against the LLM's own target.
 input int       SL_LookbackBars = 3;               // Bars back searched for the SL swing high/low
 input double    SL_BufferPoints = 100.0;           // Buffer beyond that swing high/low, in raw broker points
 
-input group "=== Take-Profit & Risk:Reward (standalone mode) ==="
-input ENUM_TP_MODE TakeProfitMode = TP_NEAREST_SWING; // How the take-profit level is chosen
+input group "=== Take-Profit & Risk:Reward ==="
+input ENUM_TP_MODE TakeProfitMode = TP_NEAREST_SWING; // How the take-profit level is chosen - used for every real order in both modes
 input int       SwingLookbackBars = 50;            // Bars back (per timeframe) searched for a swing-high/low target
 input int       SwingExcludeRecentBars = 3;        // Ignore this many most-recent bars when searching for a swing target (too close to be a real target)
 input double    FixedRiskRewardMultiple = 2.0;     // Used when TakeProfitMode = TP_FIXED_RR
-input double    MinRiskReward = 1.5;               // Skip the trade if the computed R:R is below this
+input double    MinRiskReward = 1.5;               // Standalone mode only - skip the trade if the computed R:R is below this. In server mode this input is not consulted; the server's own min_risk_reward config gates trades instead, comparing this EA's stop against the LLM's own proposed target
 
 // Global variables
 CTrade trade;
 string connectionId = "";
 bool isInitialLoadComplete = false;
 int maHandle = INVALID_HANDLE;
+
+// The EA's own SL/TP for the most recently sent signal, cached here at send
+// time (BuildSignalPayload) and used verbatim for the actual order
+// (ProcessTradingSignal) - the EA never re-reads SL/TP out of the server's
+// response, so what Agent 3 validated is exactly what gets executed, with
+// zero drift from price movement during the round-trip.
+double g_lastSignalSL = 0.0;
+double g_lastSignalTP = 0.0;
 
 // Bar-close tracking, one timestamp per tier - drives the send cadence (a
 // timeframe's candle is only sent when that timeframe actually closes a new
@@ -419,10 +431,21 @@ void OnTick()
         }
         else
         {
-            string signalJson = BuildSignalPayload(direction, slope);
-            string signal = SendDataToPython(signalJson);
-            if(signal != "")
-                ProcessTradingSignal(signal);
+            // Trade-count cap is enforced here, before the server is ever
+            // contacted - the server has no independent trade-count veto of
+            // its own, so a signal skipped here is never seen server-side at
+            // all (see guardrail.py's module docstring).
+            if(!CanOpenNewTrade())
+            {
+                Print("Max trades reached - signal not sent");
+            }
+            else
+            {
+                string signalJson = BuildSignalPayload(direction, slope);
+                string signal = SendDataToPython(signalJson);
+                if(signal != "")
+                    ProcessTradingSignal(signal);
+            }
         }
     }
 }
@@ -494,7 +517,22 @@ bool SendBulkHistoricalData()
         if(i > 0) json += ",";
         json += FormatCandleJSON(rates1hour[i], "H1", i);
     }
-    json += "]";
+    json += "],";
+
+    // Informational only - visibility for the GUI/demo and for spotting
+    // drift between the EA and server, never read for enforcement (every
+    // real check uses the fresh per-signal fields sent with each trigger).
+    json += "\"ea_config\":{";
+    json += "\"magic_number\":" + IntegerToString(MagicNumber) + ",";
+    json += "\"max_simultaneous_trades\":" + IntegerToString(MaxSimultaneousTrades) + ",";
+    json += "\"take_profit_mode\":\"" + EnumToString(TakeProfitMode) + "\",";
+    json += "\"fixed_risk_reward_multiple\":" + DoubleToString(FixedRiskRewardMultiple, 2) + ",";
+    json += "\"sl_lookback_bars\":" + IntegerToString(SL_LookbackBars) + ",";
+    json += "\"sl_buffer_points\":" + DoubleToString(SL_BufferPoints, 1) + ",";
+    json += "\"min_risk_reward_standalone\":" + DoubleToString(MinRiskReward, 2) + ",";
+    json += "\"news_blackout_minutes\":" + IntegerToString(NewsBlackoutMinutes);
+    json += "}";
+
     json += "}";
     
     Print("Sending bulk data to Python server (", StringLen(json), " characters)...");
@@ -523,13 +561,19 @@ string BuildAccountAndTradesTrailer()
     string json = "\"spread\":" + DoubleToString(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) / 10.0, 1) + ",";
     // Account equity/balance let the server-side guardrail track daily drawdown
     json += "\"account_balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",";
-    json += "\"account_equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2);
+    json += "\"account_equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
+    // Server-configurable news-blackout window - not a hardcoded server value,
+    // so it's re-sent on every request rather than assumed cached.
+    json += "\"news_blackout_minutes\":" + IntegerToString(NewsBlackoutMinutes);
 
     if(EnableTradeManagement)
     {
+        // No max_trades/current_trade_count here - that cap is enforced
+        // entirely EA-side (CanOpenNewTrade(), checked before a signal is
+        // ever sent), so the server has no independent trade-count veto and
+        // doesn't need this number. open_trades itself stays - Agent 2 uses
+        // it as context (stacking/correlation judgment), and the GUI shows it.
         json += "," + GetOpenTradesInfo();
-        json += ",\"max_trades\":" + IntegerToString(MaxSimultaneousTrades);
-        json += ",\"current_trade_count\":" + IntegerToString(CountOpenTrades());
     }
     return json;
 }
@@ -589,12 +633,24 @@ string BuildSignalPayload(string direction, double slope)
     if(CopyRates(_Symbol, PERIOD_M5, 0, 1, rM5) <= 0) return "";
     if(CopyRates(_Symbol, PERIOD_H1, 0, 1, rH1) <= 0) return "";
 
+    // This EA's own SL/TP for the trade, computed the same way the
+    // standalone/bypass path always has (ComputeStandaloneStopLoss/
+    // ComputeStandaloneTakeProfit) - sent to the server as the risk leg for
+    // Agent 3's cross-check, and cached here so ProcessTradingSignal() uses
+    // these exact values for the real order rather than anything echoed
+    // back in the response.
+    double price = (direction == "BUY") ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    g_lastSignalSL = ComputeStandaloneStopLoss(direction, price);
+    g_lastSignalTP = ComputeStandaloneTakeProfit(direction, price, g_lastSignalSL);
+
     string json = "{";
     json += "\"request_type\":\"signal\",";
     json += "\"symbol\":\"" + _Symbol + "\",";
     json += "\"connection_id\":\"" + connectionId + "\",";
     json += "\"trigger_direction\":\"" + direction + "\",";
     json += "\"trigger_slope_points\":" + DoubleToString(slope, 2) + ",";
+    json += "\"stop_loss\":" + DoubleToString(g_lastSignalSL, _Digits) + ",";
+    json += "\"take_profit\":" + DoubleToString(g_lastSignalTP, _Digits) + ",";
 
     json += "\"candles\":[";
     json += FormatCandleJSON(rM1[0], "M1", 1) + ",";
@@ -914,37 +970,21 @@ void ProcessTradingSignal(string signal)
             return;
         }
         
-        double price = 0;
-        double sl = 0;
-        double tp = 0;
-        
-        if(action == "BUY")
-        {
-            price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-            // Default Fallback
-            sl = price - 50 * _Point;
-            tp = price + 100 * _Point;
-        }
-        else
-        {
-            price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-            // Default Fallback
-            sl = price + 50 * _Point;
-            tp = price - 100 * _Point;
-        }
-        
-        // Extract EXACT SL/TP from JSON (if available)
-        double signalSL = StringToDouble(ExtractJsonValue(signal, "stop_loss"));
-        double signalTP = StringToDouble(ExtractJsonValue(signal, "take_profit"));
-        
-        if(signalSL > 0) sl = signalSL;
-        if(signalTP > 0) tp = signalTP;
-        
+        double price = (action == "BUY") ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+        // Deliberately NOT reading stop_loss/take_profit out of the server's
+        // response - always use this EA's own values, exactly as sent in
+        // BuildSignalPayload() and already validated server-side by Agent 3
+        // against the LLM's independent target. The LLM's own proposed
+        // SL/TP (if the response even carries one) is never read here.
+        double sl = g_lastSignalSL;
+        double tp = g_lastSignalTP;
+
         // Execute
         if(action == "BUY")
-            trade.Buy(LotSize, _Symbol, price, sl, tp, "LLM BUY " + DoubleToString(confidence, 0) + "%");
+            trade.Buy(LotSize, _Symbol, price, sl, tp, "AI BUY " + DoubleToString(confidence, 0) + "%");
         else
-            trade.Sell(LotSize, _Symbol, price, sl, tp, "LLM SELL " + DoubleToString(confidence, 0) + "%");
+            trade.Sell(LotSize, _Symbol, price, sl, tp, "AI SELL " + DoubleToString(confidence, 0) + "%");
     }
 }
 

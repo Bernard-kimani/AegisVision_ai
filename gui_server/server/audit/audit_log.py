@@ -26,9 +26,14 @@ class AuditRecord:
     guardrail_vetoed: bool
     guardrail_veto_reason: Optional[str]
     final_action: str                      # BUY | SELL | WAIT
-    final_stop_loss: Optional[float] = None
-    final_take_profit: Optional[float] = None
+    final_stop_loss: Optional[float] = None    # the EA's stop, only when final_action is BUY/SELL - what was actually traded
+    final_take_profit: Optional[float] = None  # the EA's target, only when final_action is BUY/SELL - what was actually traded
     entry_price: Optional[float] = None    # market price at decision time
+    ea_stop_loss: Optional[float] = None       # Agent 0's proposed stop, logged regardless of the final action
+    ea_take_profit: Optional[float] = None     # Agent 0's proposed target, logged regardless of the final action
+    llm_stop_loss: Optional[float] = None      # Agent 2's own independent stop read (ACCEPT only)
+    llm_take_profit: Optional[float] = None    # Agent 2's own independent target read (ACCEPT only) - the reward leg Agent 3 checked
+    risk_reward: Optional[float] = None        # Agent 3's computed reward:risk from ea_stop_loss vs. llm_take_profit
 
     @staticmethod
     def now(**kwargs) -> "AuditRecord":

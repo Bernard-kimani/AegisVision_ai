@@ -6,12 +6,14 @@ market summary plus a fast-rendered chart image. This wraps the existing
 SlidingWindowManager/DataPreprocessor/chart_generator - it doesn't reimplement
 them, it just gives the rest of the pipeline one narrow interface to depend on.
 
-Also computes the deterministic trigger metrics (stop-loss/take-profit,
-headroom to the nearest liquidity pool, risk:reward, higher-timeframe bias)
-that feed the Agent 2 vision prompt. These are plain arithmetic over the
-buffered candles, not an LLM call - direction comes from Agent 0's trigger
-(EA), Agent 2 only judges whether the visual setup looks like the reference
-template, it doesn't invent a trade plan.
+Also computes deterministic structural context (headroom to the nearest
+liquidity pool, higher-timeframe bias) that feeds the Agent 2 vision prompt.
+Plain arithmetic over the buffered candles, not an LLM call. Stop-loss/
+take-profit are NOT computed here anymore - Agent 0 (the EA) sends its own
+fixed-ratio SL/TP, and Agent 2 proposes its own independent SL/TP from the
+chart; Agent 3 is where those two numbers get compared. This module's
+headroom/bias output is independent structural context, not tied to either
+of those specific numbers.
 """
 
 import logging
@@ -34,11 +36,6 @@ TIMEFRAME_TO_WINDOW_ATTR = {"M1": "candles_1min", "M5": "candles_5min", "H1": "c
 
 STRATEGY_MA_PERIOD = 20  # must match the EA's MA_Period input (MA_Method = MODE_SMA)
 STRATEGY_RSI_PERIOD = 14  # standard RSI reading, shown as a sub-panel on M1 charts
-SL_LOOKBACK_CANDLES = 3   # must match the EA's SL_LookbackBars input
-# Must match the EA's SL_BufferPoints input x the broker's point size
-# (e.g. 100 points x $0.01 = $1.00 for a 2-digit XAUUSD quote). Update this
-# if SL_BufferPoints changes or the broker quotes gold at different precision.
-SL_BUFFER_PRICE = 1.00
 SWING_LOOKBACK_CANDLES = 50
 SWING_EXCLUDE_RECENT = 3  # ignore the last few candles when looking for a swing level - too close to be a real target
 
@@ -54,12 +51,10 @@ class IngestorPayload:
 
 @dataclass
 class TriggerMetrics:
-    """Deterministic (non-LLM) numbers computed for a signal event, matching
-    the placeholders in Agent 2's production prompt template."""
+    """Deterministic (non-LLM) structural context for a signal event, matching
+    the placeholders in Agent 2's production prompt template. No SL/TP here -
+    see the module docstring."""
     direction: str  # BUY | SELL
-    stop_loss: Optional[float]
-    take_profit: Optional[float]
-    risk_reward: Optional[float]
     headroom_pips: Optional[float]
     higher_timeframe_bias: str
 
@@ -147,7 +142,7 @@ class Ingestor:
             open_trades=open_trades or [],
         )
 
-    # --- Deterministic trigger metrics (SL/TP/headroom/R:R/higher-tf bias) ---
+    # --- Deterministic structural context (headroom/higher-tf bias) ---
 
     def compute_trigger_metrics(self, symbol: str, direction: str) -> Optional[TriggerMetrics]:
         window_data = self.window_manager.get_window_data(self.window_key_for(symbol))
@@ -159,42 +154,25 @@ class Ingestor:
         h1 = window_data.candles_1hour
         current_price = m1[-1].close_price
 
-        recent_extreme_window = m1[-SL_LOOKBACK_CANDLES:] if len(m1) >= SL_LOOKBACK_CANDLES else m1
-        buffer = SL_BUFFER_PRICE
-
-        if direction == "BUY":
-            recent_extreme = min(c.low_price for c in recent_extreme_window)
-            stop_loss = recent_extreme - buffer
-        else:
-            recent_extreme = max(c.high_price for c in recent_extreme_window)
-            stop_loss = recent_extreme + buffer
-
+        # Headroom is distance to the nearest 5m/1h swing high/low beyond
+        # current price - independent structural context ("how much clear
+        # space is there to run"), not tied to anyone's specific SL/TP.
         target_5m = self._find_swing_target(m5, direction)
         target_1h = self._find_swing_target(h1, direction)
         candidates = [t for t in (target_5m, target_1h) if t is not None]
         if direction == "BUY":
             candidates = [t for t in candidates if t > current_price]
-            take_profit = min(candidates) if candidates else None
+            nearest_target = min(candidates) if candidates else None
         else:
             candidates = [t for t in candidates if t < current_price]
-            take_profit = max(candidates) if candidates else None
+            nearest_target = max(candidates) if candidates else None
 
-        risk_reward = None
-        headroom_pips = None
-        if take_profit is not None:
-            risk = abs(current_price - stop_loss)
-            reward = abs(take_profit - current_price)
-            headroom_pips = reward
-            if risk > 0:
-                risk_reward = reward / risk
+        headroom_pips = abs(nearest_target - current_price) if nearest_target is not None else None
 
         bias = self._compute_higher_timeframe_bias(h1, m5)
 
         return TriggerMetrics(
             direction=direction,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            risk_reward=risk_reward,
             headroom_pips=headroom_pips,
             higher_timeframe_bias=bias,
         )

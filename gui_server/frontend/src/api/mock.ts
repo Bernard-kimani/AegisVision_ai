@@ -20,7 +20,6 @@ let mockConfig: FlatConfig = {
   min_confidence: '70',
   min_risk_reward: '1.5',
   max_spread: '2.0',
-  max_trades: '3',
   max_daily_drawdown_percent: '5.0',
 }
 

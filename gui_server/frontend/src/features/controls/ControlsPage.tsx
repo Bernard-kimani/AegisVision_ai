@@ -61,7 +61,7 @@ function SignalDetailModal({ record, onClose }: { record: SignalRecord; onClose:
 const DEFAULTS: FlatConfig = {
   host: 'localhost', port: '8080', llm_provider: 'gemini', model: 'gemini-2.5-flash',
   api_key: '', temperature: '0.3', max_tokens: '4000', min_confidence: '70',
-  min_risk_reward: '1.5', max_spread: '2.0', max_trades: '3', max_daily_drawdown_percent: '5.0',
+  min_risk_reward: '1.5', max_spread: '2.0', max_daily_drawdown_percent: '5.0',
 }
 
 export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (msg: string) => void }) {

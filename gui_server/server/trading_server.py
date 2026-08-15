@@ -65,6 +65,13 @@ _heartbeat_lock = threading.Lock()
 # the latest one without a growing gallery to manage.
 LATEST_CHART_PATH = os.path.join(STORAGE_DATA_DIR, "latest_chart.png")
 
+# EA-reported config snapshot (magic number, TP mode, SL/TP settings, news
+# blackout minutes, max trades, ...), sent once per bulk-load. Informational
+# only - visibility for the GUI/demo/debugging drift between the EA and
+# server, never read for enforcement (enforcement always uses the fresh
+# per-signal fields instead).
+EA_CONFIG_PATH = os.path.join(STORAGE_DATA_DIR, "ea_config.json")
+
 
 def _save_latest_chart(chart_b64: str) -> None:
     try:
@@ -73,6 +80,15 @@ def _save_latest_chart(chart_b64: str) -> None:
         logger.info(f"Saved latest chart image to {LATEST_CHART_PATH}")
     except Exception as e:
         logger.error(f"Failed to save latest chart image: {e}")
+
+
+def _save_ea_config(ea_config: Dict[str, Any]) -> None:
+    try:
+        with open(EA_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(ea_config, f, indent=2)
+        logger.info(f"Saved EA-reported config snapshot to {EA_CONFIG_PATH}")
+    except Exception as e:
+        logger.error(f"Failed to save EA config snapshot: {e}")
 
 
 def default_config() -> Dict[str, Any]:
@@ -89,7 +105,6 @@ def default_config() -> Dict[str, Any]:
             "min_confidence": 70,
             "min_risk_reward": 1.5,
             "max_spread": 2.0,
-            "max_trades": 3,
             "max_daily_drawdown_percent": 5.0,
         },
     }
@@ -150,7 +165,6 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         min_risk_reward=float(cfg["trading"]["min_risk_reward"]),
         max_spread=float(cfg["trading"]["max_spread"]),
         max_daily_drawdown_percent=float(cfg["trading"]["max_daily_drawdown_percent"]),
-        max_simultaneous_trades=int(cfg["trading"]["max_trades"]),
         news_fetcher=news_fetcher,
     )
 
@@ -357,6 +371,9 @@ def _handle_bulk_load(data: Dict, symbol: str, ingestor: Ingestor) -> Dict[str, 
 
     result = ingestor.ingest_bulk(symbol, candles_1min, candles_5min, candles_1hour)
 
+    if data.get('ea_config'):
+        _save_ea_config(data['ea_config'])
+
     if result["success"]:
         # Render a test chart off the freshly-loaded window, as if a signal
         # had just fired - lets whoever just connected the EA see chart
@@ -419,10 +436,10 @@ def _run_pipeline(
     if payload.chart_image_b64:
         _save_latest_chart(payload.chart_image_b64)
 
-    # Direction and SL/TP/headroom/R:R/higher-tf-bias are all deterministic -
-    # computed by Agent 0 (the EA's trigger) and Agent 1 (this call), never by
-    # the LLM. Agent 2 only judges whether the visual setup justifies acting
-    # on them.
+    # Headroom/higher-tf-bias are deterministic structural context computed by
+    # Agent 1 - still useful for Agent 2's judgment even though SL/TP no
+    # longer come from here (see below): they're independent of whatever
+    # specific stop/target the EA or the LLM end up proposing.
     trigger_metrics = ingestor.compute_trigger_metrics(symbol, trigger_direction)
 
     llm_t0 = time.perf_counter()
@@ -432,12 +449,20 @@ def _run_pipeline(
         direction=trigger_direction,
         calculated_slope=request_data.get('trigger_slope_points'),
         headroom_pips=trigger_metrics.headroom_pips if trigger_metrics else None,
-        risk_reward_ratio=trigger_metrics.risk_reward if trigger_metrics else None,
         higher_timeframe_bias=trigger_metrics.higher_timeframe_bias if trigger_metrics else None,
+        open_trades=open_trades,
     )
     llm_ms = (time.perf_counter() - llm_t0) * 1000
 
     current_price = _latest_close_price(ingestor, symbol)
+
+    # EA-side numbers (Agent 0) and LLM-side numbers (Agent 2) are read from
+    # two completely independent sources - the EA's own fixed-ratio SL/TP
+    # calc (sent in the payload) and the LLM's own chart-only read (parsed
+    # from its response) - so Agent 3 is the first place they're ever
+    # compared. Neither side has seen the other's number.
+    ea_stop_loss = float(request_data['stop_loss']) if request_data.get('stop_loss') is not None else None
+    ea_take_profit = float(request_data['take_profit']) if request_data.get('take_profit') is not None else None
 
     ctx = GuardrailContext(
         symbol=symbol,
@@ -445,13 +470,16 @@ def _run_pipeline(
         llm_verdict=verdict.verdict,
         llm_confidence=verdict.confidence,
         llm_reasoning=verdict.reasoning,
-        proposed_direction=trigger_direction if trigger_metrics else None,
-        proposed_stop_loss=trigger_metrics.stop_loss if trigger_metrics else None,
-        proposed_take_profit=trigger_metrics.take_profit if trigger_metrics else None,
+        proposed_direction=trigger_direction,
+        ea_stop_loss=ea_stop_loss,
+        ea_take_profit=ea_take_profit,
+        llm_stop_loss=verdict.stop_loss,
+        llm_take_profit=verdict.take_profit,
         current_price=current_price,
         spread=float(request_data.get('spread', 0.0) or 0.0),
         open_trades_count=len(open_trades),
         account_equity=request_data.get('account_equity'),
+        news_blackout_minutes=int(request_data['news_blackout_minutes']) if request_data.get('news_blackout_minutes') is not None else None,
     )
     result = guardrail.evaluate(ctx)
 

@@ -227,14 +227,18 @@ class NewsFetcher:
         
         return news_text
     
-    def get_news_impact_on_pair(self, symbol: str, news_events: List[Dict]) -> str:
+    def get_news_impact_on_pair(self, symbol: str, news_events: List[Dict], critical_window_minutes: int = 30) -> str:
         """
         Determine if news affects the trading pair
-        
+
         Args:
             symbol: Trading pair (e.g., "XAUUSD", "EURUSD")
             news_events: List of news events
-            
+            critical_window_minutes: how close (before/after) a high-impact event
+                has to be to count as CRITICAL - driven by the EA's
+                NewsBlackoutMinutes input so the blackout window is
+                configurable per-deployment rather than hardcoded here.
+
         Returns:
             Impact level: "CRITICAL", "HIGH", "MODERATE", "LOW"
         """
@@ -268,7 +272,7 @@ class NewsFetcher:
         
         # Check if any news affects these currencies
         now = datetime.now()
-        critical_window = timedelta(minutes=30)  # 30 minutes before/after
+        critical_window = timedelta(minutes=critical_window_minutes)
         
         for event in news_events:
             event_currency = event['currency'].upper()

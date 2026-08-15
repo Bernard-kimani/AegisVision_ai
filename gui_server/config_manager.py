@@ -80,7 +80,6 @@ class ConfigManager:
                 "min_confidence": "70",
                 "min_risk_reward": "1.5",
                 "max_spread": "2.0",
-                "max_trades": "3",
                 "max_daily_drawdown_percent": "5.0"
             },
             "ui": {
@@ -180,7 +179,6 @@ class ConfigManager:
                 "min_confidence": float(flat_config.get("min_confidence", "70")),
                 "min_risk_reward": float(flat_config.get("min_risk_reward", "1.5")),
                 "max_spread": float(flat_config.get("max_spread", "2.0")),
-                "max_trades": int(flat_config.get("max_trades", "3")),
                 "max_daily_drawdown_percent": float(flat_config.get(
                     "max_daily_drawdown_percent", current_trading.get("max_daily_drawdown_percent", "5.0")
                 ))
@@ -229,7 +227,6 @@ class ConfigManager:
             "min_confidence": str(config["trading"]["min_confidence"]),
             "min_risk_reward": str(config["trading"]["min_risk_reward"]),
             "max_spread": str(config["trading"]["max_spread"]),
-            "max_trades": str(config["trading"]["max_trades"]),
             "max_daily_drawdown_percent": str(config["trading"].get("max_daily_drawdown_percent", "5.0"))
         }
 
@@ -299,7 +296,6 @@ class ConfigManager:
                 flat_config["min_confidence"] = str(trading.get("min_confidence", "70"))
                 flat_config["min_risk_reward"] = str(trading.get("min_risk_reward", "1.5"))
                 flat_config["max_spread"] = str(trading.get("max_spread", "2.0"))
-                flat_config["max_trades"] = str(trading.get("max_trades", "3"))
                 flat_config["max_daily_drawdown_percent"] = str(trading.get("max_daily_drawdown_percent", "5.0"))
             
             logger.info(f"Configuration imported from {file_path}")

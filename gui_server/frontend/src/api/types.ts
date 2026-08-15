@@ -12,7 +12,6 @@ export interface FlatConfig {
   min_confidence: string
   min_risk_reward: string
   max_spread: string
-  max_trades: string
   max_daily_drawdown_percent: string
 }
 
