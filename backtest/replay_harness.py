@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(_GUI_SERVER_ROOT, "server")))
 
 from data_loader import M1SliceIndex, load_m1_csv, resample_ohlc
 from metrics import compare_before_after
+from trigger_detector import compute_ea_stop_loss, compute_ea_take_profit
 
 from data.models import CandleData
 from data.preprocessor import DataPreprocessor
@@ -99,7 +100,9 @@ def build_agents(min_confidence: float, min_risk_reward: float, max_spread: floa
 
     # News blackout and daily-drawdown vetoes don't apply meaningfully to a
     # historical replay (no live news feed for 2018 data, no real account
-    # equity) - disabled here, not in the live guardrail.
+    # equity) - disabled here, not in the live guardrail. No max-trades knob
+    # to disable anymore either - that veto was removed from the guardrail
+    # entirely (the EA gates trade count itself now), so it's a non-issue.
     guardrail = RiskGuardrail(
         audit_store=audit_store,
         drawdown_state_path=drawdown_state_path,
@@ -107,7 +110,6 @@ def build_agents(min_confidence: float, min_risk_reward: float, max_spread: floa
         min_risk_reward=min_risk_reward,
         max_spread=max_spread,
         max_daily_drawdown_percent=100.0,
-        max_simultaneous_trades=999,
         news_fetcher=None,
     )
 
@@ -182,39 +184,51 @@ def run_replay(
             skipped += 1
             continue
 
-        verdict = vision_compliance.evaluate(payload.market_summary_text, payload.chart_image_b64)
-
+        # Direction/slope come from the real mechanical trigger (extract_triggers.py
+        # / trigger_detector.detect_triggers), same as the EA's CheckStrategyTrigger
+        # - Agent 2 only judges it, never invents one (see vision_compliance.py).
+        direction = event["direction"]
         entry_price = float(m1_recent.iloc[-1].close)
+
+        # This event's EA-equivalent SL/TP, computed the same way BuildSignalPayload()
+        # does live right before sending a signal - the risk leg for Agent 3's R:R
+        # check, and (if the trade goes through) what's actually "executed" below.
+        ea_sl = compute_ea_stop_loss(m1_recent, direction)
+        ea_tp = compute_ea_take_profit(direction, entry_price, ea_sl, m5_recent, h1_recent)
+
+        verdict = vision_compliance.evaluate(
+            payload.market_summary_text, payload.chart_image_b64, direction=direction, open_trades=[],
+        )
+
         atr_estimate = float((m1_recent["high"] - m1_recent["low"]).tail(20).mean()) or 0.5
         future_path = index.path_after(event_time, max_rows=500)
 
-        # --- RAW baseline: take every trigger, always BUY (or the LLM's proposed
-        # direction if it happened to suggest one), fixed ATR-based SL/TP. This
-        # is the "before AI filtering" comparison point, not a real strategy.
-        raw_direction = verdict.direction or "BUY"
-        if raw_direction == "BUY":
+        # --- RAW baseline: take every real trigger, unfiltered, fixed ATR-based
+        # SL/TP. This is the "before AI filtering" comparison point, not a real
+        # strategy - deliberately not the EA's own SL/TP calc above.
+        if direction == "BUY":
             raw_sl = entry_price - atr_estimate * atr_sl_multiplier
             raw_tp = entry_price + atr_estimate * atr_tp_multiplier
         else:
             raw_sl = entry_price + atr_estimate * atr_sl_multiplier
             raw_tp = entry_price - atr_estimate * atr_tp_multiplier
 
-        raw_outcome, raw_exit = simulate_trade_outcome(future_path, raw_direction, raw_sl, raw_tp)
+        raw_outcome, raw_exit = simulate_trade_outcome(future_path, direction, raw_sl, raw_tp)
         if raw_exit is not None:
             raw_trades.append({
-                "timestamp": event["timestamp"], "direction": raw_direction,
+                "timestamp": event["timestamp"], "direction": direction,
                 "entry": entry_price, "exit": raw_exit, "outcome": raw_outcome,
-                "pnl": compute_pnl(raw_direction, entry_price, raw_exit),
+                "pnl": compute_pnl(direction, entry_price, raw_exit),
             })
 
-        # --- AI-filtered: only trade if the guardrail actually approves
-        proposed_sl = verdict.stop_loss if verdict.stop_loss is not None else raw_sl
-        proposed_tp = verdict.take_profit if verdict.take_profit is not None else raw_tp
-
+        # --- AI-filtered: only trade if the guardrail actually approves. The EA's
+        # stop is the risk leg; the LLM's own independent target (if it accepted)
+        # is the reward leg - neither side has seen the other's number, same as live.
         ctx = GuardrailContext(
             symbol=symbol, market_snapshot_summary=payload.market_summary_text[:2000],
             llm_verdict=verdict.verdict, llm_confidence=verdict.confidence, llm_reasoning=verdict.reasoning,
-            proposed_direction=verdict.direction, proposed_stop_loss=proposed_sl, proposed_take_profit=proposed_tp,
+            proposed_direction=direction, ea_stop_loss=ea_sl, ea_take_profit=ea_tp,
+            llm_stop_loss=verdict.stop_loss, llm_take_profit=verdict.take_profit,
             current_price=entry_price, spread=0.0, open_trades_count=0, account_equity=None,
         )
         result = guardrail.evaluate(ctx)

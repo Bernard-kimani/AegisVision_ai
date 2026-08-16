@@ -23,7 +23,6 @@ def make_guardrail(tmpdir, **overrides):
         min_risk_reward=1.5,
         max_spread=2.0,
         max_daily_drawdown_percent=5.0,
-        max_simultaneous_trades=3,
         news_fetcher=None,
     )
     kwargs.update(overrides)
@@ -31,6 +30,9 @@ def make_guardrail(tmpdir, **overrides):
 
 
 def base_ctx(**overrides) -> GuardrailContext:
+    # ea_stop_loss is the risk leg (Agent 0's real stop); llm_take_profit is
+    # the reward leg (Agent 2's own independent target) - risk=10 (2000->1990),
+    # reward=20 (2000->2020) => R:R 2.0, comfortably above the 1.5 default.
     defaults = dict(
         symbol="XAUUSD",
         market_snapshot_summary="test summary",
@@ -38,8 +40,10 @@ def base_ctx(**overrides) -> GuardrailContext:
         llm_confidence=85.0,
         llm_reasoning="looks good",
         proposed_direction="BUY",
-        proposed_stop_loss=1990.0,
-        proposed_take_profit=2020.0,
+        ea_stop_loss=1990.0,
+        ea_take_profit=2020.0,
+        llm_stop_loss=1985.0,
+        llm_take_profit=2020.0,
         current_price=2000.0,
         spread=1.0,
         open_trades_count=0,
@@ -79,8 +83,21 @@ def test_low_confidence_is_vetoed():
 def test_poor_risk_reward_is_vetoed():
     with tempfile.TemporaryDirectory() as tmp:
         guardrail, _ = make_guardrail(tmp, min_risk_reward=1.5)
-        # risk = 10 (2000->1990), reward = 5 (2000->2005) => R:R 0.5, below 1.5
-        result = guardrail.evaluate(base_ctx(proposed_take_profit=2005.0))
+        # risk = 10 (2000->ea_stop_loss 1990), reward = 5 (2000->llm_take_profit
+        # 2005) => R:R 0.5, below 1.5. The LLM's own target is what's checked -
+        # the EA's stop stays at the base_ctx default.
+        result = guardrail.evaluate(base_ctx(llm_take_profit=2005.0))
+        assert result.action == "WAIT"
+        assert result.vetoed is True
+        assert "R:R" in result.veto_reason
+
+
+def test_missing_llm_target_fails_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        guardrail, _ = make_guardrail(tmp)
+        # LLM ACCEPTed but its response didn't parse a usable take-profit -
+        # Agent 3 can't validate the R:R comparison, so it must not silently pass.
+        result = guardrail.evaluate(base_ctx(llm_take_profit=None))
         assert result.action == "WAIT"
         assert result.vetoed is True
         assert "risk:reward" in result.veto_reason
@@ -93,15 +110,6 @@ def test_wide_spread_is_vetoed():
         assert result.action == "WAIT"
         assert result.vetoed is True
         assert "spread" in result.veto_reason
-
-
-def test_max_trades_reached_is_vetoed():
-    with tempfile.TemporaryDirectory() as tmp:
-        guardrail, _ = make_guardrail(tmp, max_simultaneous_trades=2)
-        result = guardrail.evaluate(base_ctx(open_trades_count=2))
-        assert result.action == "WAIT"
-        assert result.vetoed is True
-        assert "max simultaneous trades" in result.veto_reason
 
 
 def test_daily_drawdown_limit_is_vetoed_and_persists_across_instances():
@@ -129,7 +137,7 @@ def test_news_blackout_hard_blocks_regardless_of_confidence():
         def get_high_impact_news(self, hours_ahead, hours_behind):
             return [{"time": None, "currency": "USD", "event": "NFP", "impact": "HIGH"}]
 
-        def get_news_impact_on_pair(self, symbol, events):
+        def get_news_impact_on_pair(self, symbol, events, critical_window_minutes=30):
             return "CRITICAL"
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -157,8 +165,8 @@ if __name__ == "__main__":
     test_llm_reject_becomes_wait_without_veto_flag()
     test_low_confidence_is_vetoed()
     test_poor_risk_reward_is_vetoed()
+    test_missing_llm_target_fails_closed()
     test_wide_spread_is_vetoed()
-    test_max_trades_reached_is_vetoed()
     test_daily_drawdown_limit_is_vetoed_and_persists_across_instances()
     test_news_blackout_hard_blocks_regardless_of_confidence()
     test_every_evaluation_writes_an_audit_record_even_when_accepted()

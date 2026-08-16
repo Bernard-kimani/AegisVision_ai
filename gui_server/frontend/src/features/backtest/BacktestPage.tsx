@@ -2,16 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { getApi } from '../../api/client'
 import type { BacktestReport } from '../../api/types'
-import { Button, Section, Select, Slider, StatusDot, TextField } from '../../components/primitives'
-
-const INTERVAL_OPTIONS = [
-  { value: '1', label: '1m' },
-  { value: '5', label: '5m' },
-  { value: '15', label: '15m' },
-  { value: '30', label: '30m' },
-  { value: '60', label: '60m · 1h' },
-  { value: '240', label: '240m · 4h' },
-]
+import { Button, Section, Slider, StatusDot, TextField } from '../../components/primitives'
 
 function StepBadge({ n }: { n: number }) {
   return (
@@ -83,7 +74,6 @@ export default function BacktestPage({ onStatusMessage }: { onStatusMessage: (ms
 
   const [startDate, setStartDate] = useState('2018-01-05')
   const [endDate, setEndDate] = useState('2018-01-15')
-  const [interval, setIntervalMin] = useState('60')
   const [maxEvents, setMaxEvents] = useState('50')
 
   const [throttle, setThrottle] = useState('12')
@@ -109,7 +99,7 @@ export default function BacktestPage({ onStatusMessage }: { onStatusMessage: (ms
   }, [replayJob.returncode])
 
   const extractMutation = useMutation({
-    mutationFn: async () => (await getApi()).start_extract(startDate, endDate, interval, maxEvents),
+    mutationFn: async () => (await getApi()).start_extract(startDate, endDate, maxEvents),
     onSuccess: (jobId) => { appendLine('Starting trigger extraction...'); extractJob.start(jobId) },
   })
 
@@ -133,9 +123,9 @@ export default function BacktestPage({ onStatusMessage }: { onStatusMessage: (ms
             <div className="flex flex-col gap-3">
               <TextField label="Start Date" mono value={startDate} onChange={(e) => setStartDate(e.target.value)} placeholder="YYYY-MM-DD" />
               <TextField label="End Date" mono value={endDate} onChange={(e) => setEndDate(e.target.value)} placeholder="YYYY-MM-DD" />
-              <Select label="Resolution Interval" value={interval} onChange={(e) => setIntervalMin(e.target.value)}>
-                {INTERVAL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </Select>
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                Scans for the EA's real MA-touch/confirmation/slope trigger — the same mechanical setup it runs live, not a fixed sample.
+              </p>
               <TextField label="Max Event Limit" mono value={maxEvents} onChange={(e) => setMaxEvents(e.target.value)} />
               <Button className="mt-1 self-start" onClick={() => extractMutation.mutate()} disabled={extractJob.running}>
                 {extractJob.running ? 'Extracting…' : 'Extract Events'}

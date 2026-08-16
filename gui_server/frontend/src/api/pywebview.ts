@@ -60,7 +60,7 @@ export interface PywebviewApi {
   list_prompt_versions(strategyId: string): Promise<PromptVersion[]>
   save_prompt(strategyId: string, text: string, notes?: string): Promise<PromptVersion>
 
-  start_extract(startDate: string, endDate: string, intervalMinutes: string, maxEvents: string): Promise<string>
+  start_extract(startDate: string, endDate: string, maxEvents: string): Promise<string>
   start_replay(throttleSeconds: string, minConfidence: string, minRiskReward: string): Promise<{ job_id?: string; error?: string }>
   get_job_output(jobId: string, since?: number): Promise<JobOutput>
   get_backtest_report(): Promise<BacktestReport | null>

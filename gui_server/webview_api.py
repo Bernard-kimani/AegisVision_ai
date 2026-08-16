@@ -492,12 +492,12 @@ class WebViewApi:
     # Backtest
     # ------------------------------------------------------------------
 
-    def start_extract(self, start_date: str, end_date: str, interval_minutes: str, max_events: str) -> str:
+    def start_extract(self, start_date: str, end_date: str, max_events: str) -> str:
         script = os.path.join(_BACKTEST_DIR, "extract_triggers.py")
         args = [
             sys.executable, script,
             "--start-date", start_date, "--end-date", end_date,
-            "--interval-minutes", str(interval_minutes), "--max-events", str(max_events),
+            "--max-events", str(max_events),
         ]
         job_id = str(uuid.uuid4())
         self._backtest_jobs[job_id] = _BacktestJob(args)

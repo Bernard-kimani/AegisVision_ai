@@ -1,0 +1,9 @@
+[build]
+  base = "gui_server/frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # React 19 / Vite 8 need a modern Node runtime - pin it rather than relying
+  # on Netlify's default, which can lag behind.
+  NODE_VERSION = "22"
