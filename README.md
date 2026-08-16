@@ -7,7 +7,7 @@ deterministic risk engine cross-validates both before anything reaches a broker.
 Domain: financial services / algorithmic execution on XAU/USD (gold), built as
 a reusable framework, not a one-off script tied to this one strategy.
 
-**Live demo**: [PUT_NETLIFY_URL_HERE](PUT_NETLIFY_URL_HERE) — a UI-only preview
+**Live demo**: https://aegisvisionai.netlify.app/ — a UI-only preview
 of the desktop app (Controls, Strategies, Backtest, Logs). It runs against a
 mock API with simulated data, not a live MT5 feed or real Gemini calls, so you
 can click through the full interface with zero setup. The real pipeline runs
