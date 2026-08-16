@@ -12,8 +12,8 @@ const delay = (ms = 150) => new Promise((r) => setTimeout(r, ms))
 let mockConfig: FlatConfig = {
   host: '127.0.0.1',
   port: '8080',
-  llm_provider: 'gemini',
-  model: 'gemini-2.5-flash',
+  llm_provider: 'openai',
+  model: 'accounts/fireworks/models/qwen2p5-vl-32b-instruct',
   api_key: '',
   temperature: '0.3',
   max_tokens: '4000',

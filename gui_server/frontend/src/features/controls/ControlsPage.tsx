@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getApi } from '../../api/client'
 import type { FlatConfig, SignalRecord } from '../../api/types'
 import { Button, Card, PositionRow, Section, Select, SignalRow, StatusDot, TextField } from '../../components/primitives'
-import { MODELS_BY_PROVIDER } from './models'
+import { MODELS_BY_PROVIDER, PROVIDER_LABELS } from './models'
 
 const SIGNAL_STYLE: Record<string, { icon: string; color: string }> = {
   BUY: { icon: '▲', color: 'text-success' },
@@ -59,7 +59,7 @@ function SignalDetailModal({ record, onClose }: { record: SignalRecord; onClose:
 }
 
 const DEFAULTS: FlatConfig = {
-  host: 'localhost', port: '8080', llm_provider: 'gemini', model: 'gemini-2.5-flash',
+  host: 'localhost', port: '8080', llm_provider: 'openai', model: MODELS_BY_PROVIDER.openai[0].value,
   api_key: '', temperature: '0.3', max_tokens: '4000', min_confidence: '70',
   min_risk_reward: '1.5', max_spread: '2.0', max_daily_drawdown_percent: '5.0',
 }
@@ -164,12 +164,12 @@ export default function ControlsPage({ onStatusMessage }: { onStatusMessage: (ms
             <div className="flex flex-col gap-3">
               <Select
                 label="Provider" value={form.llm_provider}
-                onChange={(e) => { set('llm_provider', e.target.value); set('model', MODELS_BY_PROVIDER[e.target.value]?.[0] ?? '') }}
+                onChange={(e) => { set('llm_provider', e.target.value); set('model', MODELS_BY_PROVIDER[e.target.value]?.[0]?.value ?? '') }}
               >
-                {Object.keys(MODELS_BY_PROVIDER).map((p) => <option key={p} value={p}>{p}</option>)}
+                {Object.keys(MODELS_BY_PROVIDER).map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p] ?? p}</option>)}
               </Select>
               <Select label="Model" value={form.model} onChange={(e) => set('model', e.target.value)}>
-                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+                {models.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </Select>
               <TextField
                 label="API Key" mono type="password" autoComplete="off" value={form.api_key}

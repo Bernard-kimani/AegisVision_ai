@@ -213,8 +213,11 @@ class WebViewApi:
             return {"success": False, "message": "Please enter an API key"}
         try:
             if provider == "openai":
+                # "openai" here means "OpenAI-compatible" - Fireworks/SiliconFlow/DashScope
+                # running Qwen2.5-VL or DeepSeek by default, not literally OpenAI's own API.
+                base_url = os.environ.get("OPENAI_BASE_URL", "https://api.fireworks.ai/inference/v1").rstrip("/")
                 headers = {"Authorization": f"Bearer {api_key}"}
-                response = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=10)
+                response = requests.get(f"{base_url}/models", headers=headers, timeout=10)
             elif provider == "anthropic":
                 headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
                 response = requests.get("https://api.anthropic.com/v1/models", headers=headers, timeout=10)

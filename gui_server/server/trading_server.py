@@ -95,8 +95,8 @@ def default_config() -> Dict[str, Any]:
     return {
         "server": {"host": "localhost", "port": 8080},
         "llm": {
-            "provider": "gemini",
-            "model": "gemini-2.5-flash",
+            "provider": "openai",
+            "model": "accounts/fireworks/models/qwen2p5-vl-32b-instruct",
             "api_key": "",
             "max_tokens": 1000,
             "temperature": 0.3,

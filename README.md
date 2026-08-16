@@ -9,7 +9,7 @@ a reusable framework, not a one-off script tied to this one strategy.
 
 **Live demo**: [https://aegisvisionai.netlify.app/](https://aegisvisionai.netlify.app/) — a UI-only preview
 of the desktop app (Controls, Strategies, Backtest, Logs). It runs against a
-mock API with simulated data, not a live MT5 feed or real Gemini calls, so you
+mock API with simulated data, not a live MT5 feed or real model calls, so you
 can click through the full interface with zero setup. The real pipeline runs
 locally against your own MT5 terminal and API key - see Setup below.
 
@@ -50,7 +50,7 @@ MT5 EA (Agent 0)  --candles + indicators + open-trade context-->  Ingestor (Agen
    + trade execution                                                    |
                                                                           v
                                                      Vision & Compliance Filter (Agent 2)
-                                                        [Gemini 2.5 Flash, multimodal]
+                                                        [Qwen2.5-VL, open-weights, multimodal]
                                                           the only LLM call in the loop
                                                                           |
                                                               ACCEPT/REJECT + confidence
@@ -169,9 +169,12 @@ overwritten. Swap in a different mechanical trigger on the EA side (the trigger
 function is a small, isolated, well-documented state machine) and the rest of
 the pipeline — ingestion, vision filtering, risk cross-validation, backtesting,
 audit logging — works unchanged. The LLM provider layer is behind the same
-`LLMProvider` interface (`server/llm/`) with Gemini wired up today and
-OpenAI/Anthropic already stubbed against the identical interface, so swapping
-model vendors doesn't touch the agent logic at all. The same pattern generalizes
+`LLMProvider` interface (`server/llm/`): an OpenAI-compatible client that runs
+open-weights models (Qwen2.5-VL, DeepSeek-V3/R1) via any OpenAI-compatible
+gateway - Fireworks AI, SiliconFlow, DashScope - is the default, with Gemini
+available as a configurable proprietary fallback and Anthropic stubbed against
+the identical interface. Swapping model vendors doesn't touch the agent logic
+at all. The same pattern generalizes
 past trading: any workflow that needs "a deterministic system flags a candidate,
 a vision-capable model judges whether this specific instance is good, a
 deterministic engine has final veto power" — document triage, industrial
@@ -195,7 +198,7 @@ harness that sidesteps this by running the pipeline outside MT5 entirely:
    rewrite of the harness around it.
 2. **`replay_harness.py`** replays each historical event through the real
    `Ingestor` / `VisionComplianceFilter` / `RiskGuardrail` classes — the same
-   Python objects the live server runs, with real (throttled) Gemini calls —
+   Python objects the live server runs, with real (throttled) model calls —
    and simulates both a "take every raw trigger" baseline and the AI-filtered
    result against the same price data.
 3. The **Backtest** tab renders a before/after table: win rate, profit factor,
@@ -218,7 +221,9 @@ repeat, all without touching a demo account.
   - `frontend/` - the React/TypeScript/Tailwind UI (Controls, Strategies, Backtest, Logs tabs).
   - `webview_api.py` - the GUI-facing control surface exposed to the frontend as `window.pywebview.api.*`.
   - `server/agents/` - the three Python agents (`ingestor.py`, `vision_compliance.py`, `guardrail.py`).
-  - `server/llm/` - pluggable LLM provider interface (Gemini wired up; OpenAI/Anthropic stubbed).
+  - `server/llm/` - pluggable LLM provider interface: OpenAI-compatible client (Qwen2.5-VL /
+    DeepSeek by default, via Fireworks/SiliconFlow/DashScope) plus Gemini as a configurable
+    proprietary fallback; Anthropic stubbed against the same interface.
   - `storage/` - local-file storage interfaces (prompts, template images) designed to be
     swapped for a Supabase-backed implementation later without touching the agents.
   - `templates_store/` - legacy global reference chart images, from before the Strategies tab
@@ -227,7 +232,7 @@ repeat, all without touching a demo account.
     daily-drawdown state. Not committed to git - this is your personal trading history.
 - `backtest/` - offline replay harness: extracts historical trigger events from the seed
   CSVs using the EA's real mechanical trigger logic, and replays them through the *real*
-  pipeline (real Gemini calls, throttled) to compare a naive "take every trigger" baseline
+  pipeline (real model calls, throttled) to compare a naive "take every trigger" baseline
   against the AI-filtered result.
 - `data_seed/` - historical XAUUSD M1/M5 CSVs (2018-era) to seed backtests. Not committed to
   git (XAUUSD_M1.csv alone is ~196MB, over GitHub's 100MB push limit) - re-export these from
@@ -256,12 +261,16 @@ repeat, all without touching a demo account.
    run the app with the `AEGISVISION_DEV=1` env var set (step 4) so it points at the Vite
    dev server instead of the built `frontend/dist`.
 
-3. **API key** - copy `.env.example` to `.env` and fill in your Gemini key:
+3. **API key** - copy `.env.example` to `.env` and fill in a key for whichever
+   provider you set in the Controls tab. Default is the open-weights path -
+   any OpenAI-compatible endpoint running Qwen2.5-VL or DeepSeek-V3/R1:
 
    ```bash
-   GEMINI_API_KEY=your-key-here
+   OPENAI_API_KEY=your-key-here
+   OPENAI_BASE_URL=https://api.fireworks.ai/inference/v1
    ```
 
+   Gemini works the same way as a configurable fallback (`GEMINI_API_KEY`).
    `.env` is gitignored - never commit it.
 
 4. **Run the desktop app**
@@ -296,6 +305,6 @@ venv\Scripts\python backtest\replay_harness.py --throttle-seconds 12
 ```
 
 Or use the **Backtest** tab in the GUI, which runs the same scripts and shows the
-before/after metrics table. Each event makes a real (throttled) Gemini call, so a few
+before/after metrics table. Each event makes a real (throttled) model call, so a few
 hundred events will take a while - this is intentional, not a bug, to respect API rate
 limits.
