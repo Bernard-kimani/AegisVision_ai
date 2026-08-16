@@ -7,6 +7,12 @@ deterministic risk engine cross-validates both before anything reaches a broker.
 Domain: financial services / algorithmic execution on XAU/USD (gold), built as
 a reusable framework, not a one-off script tied to this one strategy.
 
+**Live demo**: [PUT_NETLIFY_URL_HERE](PUT_NETLIFY_URL_HERE) — a UI-only preview
+of the desktop app (Controls, Strategies, Backtest, Logs). It runs against a
+mock API with simulated data, not a live MT5 feed or real Gemini calls, so you
+can click through the full interface with zero setup. The real pipeline runs
+locally against your own MT5 terminal and API key - see Setup below.
+
 ## Problem Statement & Domain Bottleneck
 
 Rule-based Expert Advisors have a filtering paradox: tighten the entry rules
@@ -293,21 +299,3 @@ Or use the **Backtest** tab in the GUI, which runs the same scripts and shows th
 before/after metrics table. Each event makes a real (throttled) Gemini call, so a few
 hundred events will take a while - this is intentional, not a bug, to respect API rate
 limits.
-
-## Known gaps / next steps
-
-- **Trade management**: Agent 2 is shown currently-open positions and makes a qualitative
-  stacking/correlation call as part of its checklist (accept/reject *new* setups near
-  existing ones), but it doesn't yet actively review or suggest closing/adjusting an
-  already-open position.
-- **Dual-model fallback**: only Gemini is wired up. `server/llm/openai_provider.py` and
-  `anthropic_provider.py` are stubbed against the same `LLMProvider` interface for later.
-- **Supabase migration**: `storage/prompt_store.py` and `storage/template_image_store.py`
-  are local-file implementations behind an interface designed for this; a Supabase-backed
-  implementation is a contained addition, not a rewrite (`storage/supabase_sync.py` is
-  currently a no-op stub).
-- **Latency visibility**: full round-trip timing (LLM call + total pipeline) is
-  already measured and logged per request (`trading_server.py` logs `llm_ms`/`total_ms`,
-  on top of Agent 1's own `preprocess_ms`/`chart_ms`) - it just isn't surfaced in the
-  GUI itself yet (the Logs tab shows decisions, not timing), and no aggregate benchmark
-  across many live requests has been compiled.

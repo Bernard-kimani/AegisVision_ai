@@ -1,6 +1,13 @@
 # Secrets
 .env
 
+# Internal pitch/prep content - not part of the submission
+SLIDES.md
+
+# Original full-res cover photo (~6.5MB) - only the resized webp/jpg derivatives
+# in gui_server/frontend/src/assets/ are actually used by the app
+gui_server/assets/aegisvision_cover image.png
+
 # Python
 venv/
 __pycache__/
